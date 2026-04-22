@@ -20,7 +20,7 @@ def get_ai_analysis(current_pdf_text, previous_summary, report_type):
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    Sen üst düzey bir finansal analistsin. Profesyonel bir yatırımcı için aşağıdaki {report_type} raporunu analiz et.
+    Sen üst düzey bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için aşağıdaki {report_type} raporunu analiz et.
     
     FORMAT ŞARTLARI:
     1. MANŞET: En kritik gelişmeyi vurgulayan iddialı bir başlık ve 2 cümlelik özet.
@@ -91,29 +91,4 @@ def process_automation():
         browser.close()
 
 if __name__ == "__main__":
-    process_automation()                            if download_btn:
-                                report_url = download_btn.get_attribute("href")
-                                if not report_url.startswith("http"):
-                                    report_url = "https://www.garantibbvayatirim.com.tr" + report_url
-                                
-                                resp = requests.get(report_url)
-                                with open(filename, "wb") as f:
-                                    f.write(resp.content)
-                                
-                                # Geçmişe ekle
-                                with open(history_file, "a") as f:
-                                    f.write(filename + "\n")
-                                
-                                print(f"Yeni rapor bulundu: {filename}")
-                                new_downloads = True
-                            break 
-            
-        except Exception as e:
-            print(f"Hata: {e}")
-        finally:
-            browser.close()
-    
-    return new_downloads
-
-if __name__ == "__main__":
-    download_reports()
+    process_automation()

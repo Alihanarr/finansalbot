@@ -5,53 +5,64 @@ import pdfplumber
 import google.generativeai as genai
 from playwright.sync_api import sync_playwright
 from datetime import datetime
+import time
 
-# API Yapılandırması
+# Yapılandırmalar
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 def send_telegram(message):
+    """Mesajı parçalara bölerek ve Markdown formatıyla Telegram'a gönderir."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    # Sorunu anlamak için önce formatlamasız (düz metin) deniyoruz
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID, 
-        "text": message[:4000] # Karakter sınırını aşmaması için kestik
-    }
-    try:
-        resp = requests.post(url, json=payload)
-        print(f"DEBUG: Telegram Yanıt Kodu: {resp.status_code}")
-        print(f"DEBUG: Telegram Sunucu Mesajı: {resp.text}")
-        
-        # Eğer Markdown hatasıysa düz metin olarak tekrar dene
-        if resp.status_code != 200:
-            print("DEBUG: Markdown hatası olabilir, düz metin deneniyor...")
-            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": "ANALİZ HATASI: Format uyumsuzluğu, lütfen logları kontrol et."})
-    except Exception as e:
-        print(f"!!! Telegram Bağlantı Hatası: {e}")
+    
+    # Telegram 4096 karakter sınırı olduğu için 4000'erlik parçalara bölüyoruz
+    limit = 4000
+    parts = [message[i:i+limit] for i in range(0, len(message), limit)]
+    
+    for idx, part in enumerate(parts):
+        # Eğer birden fazla parça varsa başına ek bilgi koyalım
+        header = f"*(Parça {idx+1}/{len(parts)})*\n\n" if len(parts) > 1 else ""
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID, 
+            "text": header + part, 
+            "parse_mode": "Markdown"
+        }
+        try:
+            resp = requests.post(url, json=payload)
+            if resp.status_code != 200:
+                # Markdown hatası olursa düz metin olarak tekrar dene
+                requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": part})
+        except Exception as e:
+            print(f"Telegram hatası: {e}")
+        time.sleep(1) # Mesajların sırasının karışmaması için kısa bekleme
 
 def get_ai_analysis(current_pdf_text, previous_summary, report_type):
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        selected = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in available_models else available_models[0]
         
-        # En stabil modelde sabitleyelim
-        selected = 'models/gemini-1.5-flash'
-        if selected not in available_models:
-            selected = available_models[0]
-        
-        print(f"DEBUG: Analiz İçin Seçilen Model: {selected}")
         model = genai.GenerativeModel(selected)
+        bugun = datetime.now().strftime("%d %B %Y") # Gemini'nin Türkçe ay ismini doğru kullanması için
         
         prompt = f"""
-        Sen kıdemli bir analistsin. Bir İşletme Mühendisi için bu {report_type} raporunu özetle.
-        KIYASLAMA: {previous_summary if previous_summary else "İlk veri."}
-        METİN: {current_pdf_text[:10000]}
+        Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için bu raporu analiz et.
+        
+        ÖNEMLİ KURALLAR:
+        1. Asla 'Sayın İşletme Mühendisi' veya 'Merhaba' gibi giriş cümleleri kullanma.
+        2. Doğrudan şu başlıkla başla: '*{datetime.now().strftime("%d.%m.%Y")} tarihli {report_type} raporu*'
+        3. Tüm ana başlıkları ve önemli finansal terimleri (BIST100, faiz oranı, hisse kodları vb.) çift yıldız (**Örn**) kullanarak KALIN yaz.
+        4. Hisse haberlerini 📈 (+) veya 📉 (-) şeklinde gruplandır.
+        5. Teknik seviyeleri tablo gibi düzenli göster.
+        
+        KIYASLAMA VERİSİ: {previous_summary if previous_summary else "İlk veri."}
+        METİN: {current_pdf_text[:12000]}
         """
         
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"DEBUG: Gemini Analiz Hatası: {str(e)}"
+        return f"Gemini Analiz Hatası: {str(e)}"
 
 def process_automation():
     targets = {"günlük piyasa özeti": "SABAH_RAPORU", "gün ortası notları": "OGLE_RAPORU"}
@@ -65,48 +76,42 @@ def process_automation():
     history = json.load(open(history_file)) if os.path.exists(history_file) else {}
 
     with sync_playwright() as p:
-        print("--- 1. Playwright Başlatılıyor ---")
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
         page = context.new_page()
         
-        print(f"--- 2. Siteye Gidiliyor: {bugun_sayi} ---")
         page.goto("https://www.garantibbvayatirim.com.tr/arastirma-raporlari", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(10000)
         
         items = page.query_selector_all(".reports-list-item")
-        print(f"--- 3. Sitede {len(items)} Rapor Görüldü ---")
-
+        
         for target_title, report_key in targets.items():
             for item in items:
                 text = item.inner_text().lower()
                 if target_title in text and (bugun_sayi in text or bugun_metin in text):
                     
-                    # Önceki başarılı denemeleri sildiysen burası hep çalışır
                     if history.get(f"{report_key}_LAST_DATE") != bugun_sayi:
-                        print(f"!!! EŞLEŞME BULDUM: {target_title} !!!")
                         link = item.query_selector("a.report-download")
                         if link:
                             url = link.get_attribute("href")
                             if not url.startswith("http"): url = "https://www.garantibbvayatirim.com.tr" + url
                             
                             resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-                            with open("temp.pdf", "wb") as f: f.write(resp.content)
+                            temp_pdf = f"temp_{report_key}.pdf"
+                            with open(temp_pdf, "wb") as f: f.write(resp.content)
                             
-                            with pdfplumber.open("temp.pdf") as pdf:
+                            with pdfplumber.open(temp_pdf) as pdf:
                                 raw_text = "".join(p.extract_text() for p in pdf.pages[:4])
                             
-                            print("--- 4. Gemini Analiz Ediyor... ---")
                             analysis = get_ai_analysis(raw_text, history.get(f"{report_key}_SUMMARY", ""), target_title)
-                            
-                            print("--- 5. Telegram Mesajı Gönderiliyor... ---")
-                            send_telegram(f"📊 {target_title.upper()} ANALİZİ\n\n{analysis}")
+                            send_telegram(analysis)
                             
                             history[f"{report_key}_LAST_DATE"] = bugun_sayi
                             history[f"{report_key}_SUMMARY"] = analysis
                             break
         
-        with open(history_file, "w") as f: json.dump(history, f)
+        with open(history_file, "w") as f:
+            json.dump(history, f)
         browser.close()
 
 if __name__ == "__main__":

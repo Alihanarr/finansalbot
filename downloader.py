@@ -8,11 +8,11 @@ from datetime import datetime
 import time
 
 # ==========================================
-# 1. GÜVENLİ YAPILANDIRMA VE TEMİZLEME
+# 1. GÜVENLİ YAPILANDIRMA
 # ==========================================
 def clean_env(key):
-    """GitHub Secrets içindeki olası parantez/tırnak hatalarını temizler."""
     val = os.environ.get(key, "")
+    # Secret içindeki parantez/tırnak hatalarını otomatik temizler
     return str(val).strip().replace("[", "").replace("]", "").replace("'", "").replace('"', "")
 
 genai.configure(api_key=clean_env("GEMINI_API_KEY"))
@@ -23,7 +23,7 @@ TELEGRAM_CHAT_ID = clean_env("TELEGRAM_CHAT_ID")
 # 2. MESAJ GÖNDERİMİ (ESTETİK NUMARALANDIRMA)
 # ==========================================
 def send_telegram(message):
-    """Mesajı böler; 1. parçada numara yazmaz, sonrakilerde 'Devamı' yazar."""
+    """Mesajı böler; 1. parçada numara yazmaz, 2. ve sonrakilerde 'Devamı' yazar."""
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     limit = 4000
     parts = [message[i:i+limit] for i in range(0, len(message), limit)]
@@ -39,50 +39,46 @@ def send_telegram(message):
         try:
             resp = requests.post(api_url, json=payload, timeout=30)
             if resp.status_code != 200:
-                # Markdown hatası (karakter uyuşmazlığı) olursa düz metin gönder
+                # Markdown hatası olursa düz metin gönder
                 requests.post(api_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": part}, timeout=30)
         except Exception as e:
-            print(f"!!! Telegram Gönderim Hatası: {e}")
+            print(f"!!! Telegram Hatası: {e}")
         time.sleep(1.5)
 
 # ==========================================
-# 3. GEMİNİ 2.5 ANALİZ MOTORU (ÜST DÜZEY ANALİZ)
+# 3. GEMİNİ 2.5 ANALİZ MOTORU (PREMIUM FORMAT)
 # ==========================================
 def get_ai_analysis(pdf_text, prev_sum, r_type):
-    """Her iki rapor tipini de profesyonel formatta analiz eder."""
+    """Gemini 2.5 Flash ile rapor tipine göre profesyonel analiz üretir."""
     try:
-        # Doğrudan Gemini 2.5 Flash modelini kullanıyoruz
         model = genai.GenerativeModel('gemini-2.5-flash')
-        
-        # Dinamik ve ayırt edici başlık belirleme
+        # Başlığa göre dinamik etiket
         display_title = "GÜNLÜK PIYASA ÖZETİ ANALİZİ" if "piyasa" in r_type.lower() else "GÜN ORTASI NOTLARI ANALİZİ"
         
         prompt = f"""
-        Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için analiz yap.
+        Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi profesyonel için analiz yap.
         
-        KURALLAR:
+        GÖRSEL KURALLAR:
         1. Mesaja doğrudan şu başlıkla başla: **{display_title}**
         2. Altına: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
         3. Giriş nezaket cümlelerini (Merhaba, Sayın vb.) ASLA KULLANMA.
-        4. TÜM TABLOLARI (Piyasa Verileri, Destek/Direnç Seviyeleri, Ajanda) mutlaka ``` içine al.
+        4. TÜM TABLOLARI (Piyasa Verileri, Destek/Direnç Seviyeleri, Ajanda) mutlaka ``` (triple backticks) içine al.
         5. Kritik hisse haberlerini 📈 (+) veya 📉 (-) ikonlarıyla ve **KALIN** başlıklarla ver.
         
         İÇERİK BEKLENTİSİ:
-        - Makro ekonomik görünümün BIST100 üzerindeki etkisi.
-        - Teknik seviyeler (Destek/Direnç) ve kırılma noktaları.
-        - **📊 TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: En sonda dünkü veya sabahki raporla bugünkü arasındaki farkları teknik olarak analiz et.
+        - BIST100 Teknik Seviyeler ve Kırılma Noktaları.
+        - **📊 TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: Bu bölümü EN SONDA ayrı başlıkta yap. Önceki analizle farkları belirt.
         
         ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk analiz verisi."}
         METİN: {pdf_text[:15000]}
         """
-        
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         return f"ERROR_CODE_GEMINI: {str(e)}"
 
 # ==========================================
-# 4. ANA OTOMASYON (URL DÜZELTİLDİ)
+# 4. ANA OTOMASYON (PDF URL DÜZELTMELİ)
 # ==========================================
 def process_automation():
     targets = {"günlük piyasa özeti": "SABAH_RAPORU", "gün ortası notları": "OGLE_RAPORU"}
@@ -98,31 +94,41 @@ def process_automation():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
         
-        # URL'leri Markdown formatından kurtardım, artık tertemiz saf stringler:
-        site_url = "https://www.garantibbvayatirim.com.tr/arastirma-raporlari"
+        # URL'leri Markdown hatası olmaması için en saf haliyle tutuyoruz
+        main_url = "https://www.garantibbvayatirim.com.tr/arastirma-raporlari"
         base_url = "https://www.garantibbvayatirim.com.tr"
         
-        print(f"--- Siteye Gidiliyor: {site_url} ---")
+        print(f"--- Siteye Gidiliyor: {main_url} ---")
         
         try:
-            page.goto(site_url, wait_until="domcontentloaded", timeout=60000)
+            page.goto(main_url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(10000)
             
             items = page.query_selector_all(".reports-list-item")
+            print(f"Sitede {len(items)} adet rapor bulundu.")
+
             for target_title, report_key in targets.items():
                 for item in items:
                     text = item.inner_text().lower()
                     if target_title in text and (bugun_sayi in text or bugun_metin in text):
+                        
+                        # Hafıza kontrolü
                         if history.get(f"{report_key}_LAST_DATE") != bugun_sayi:
                             print(f"--- {target_title} İşleniyor... ---")
-                            link = item.query_selector("a.report-download")
-                            if link:
-                                pdf_url = link.get_attribute("href")
-                                if not pdf_url.startswith("http"):
-                                    pdf_url = base_url + pdf_url
+                            link_elem = item.query_selector("a.report-download")
+                            if link_elem:
+                                pdf_path = link_elem.get_attribute("href")
+                                # SENİN DEDİĞİN KRİTİK NOKTA: URL tamamlama
+                                if not pdf_path.startswith("http"):
+                                    pdf_url = base_url + pdf_path
+                                else:
+                                    pdf_url = pdf_path
                                 
+                                # PDF İndirme
+                                print(f"İndiriliyor: {pdf_url}")
                                 resp = requests.get(pdf_url)
                                 with open("temp.pdf", "wb") as f: f.write(resp.content)
+                                
                                 with pdfplumber.open("temp.pdf") as pdf:
                                     raw_text = "".join(p.extract_text() for p in pdf.pages[:5])
                                 
@@ -133,7 +139,7 @@ def process_automation():
                                     send_telegram(analysis)
                                     history[f"{report_key}_LAST_DATE"] = bugun_sayi
                                     history[f"{report_key}_SUMMARY"] = analysis
-                                    print(f"--- {target_title} TAMAMLANDI ---")
+                                    print(f"--- {target_title} BAŞARIYLA TAMAMLANDI ---")
                                 break
         except Exception as e:
             print(f"KRİTİK HATA: {e}")

@@ -2,39 +2,40 @@ name: Garanti Rapor Botu
 
 on:
   schedule:
-    # Hafta içi her sabah TR saatiyle 10:10'da çalışır (UTC 07:10)
-    - cron: '10 07 * * 1-5'
-  workflow_dispatch: # Manuel çalıştırma butonu
+    # 07:10 (Sabah Özeti için)
+    # 09:10, 10:10, 11:10, 12:10, 13:10 (Gün Ortası Notları için farklı saatlerde kontrol)
+    # (UTC saatine 3 saat ekleyerek TR saatini buluyoruz)
+    - cron: '10 07,09,10,11,12,13 * * 1-5'
+  workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
     - name: Kodu kopyala
       uses: actions/checkout@v4
-
     - name: Python Kur
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-
-    - name: Kütüphaneleri ve Tarayıcıyı Yükle
+    - name: Kütüphaneleri Yükle
       run: |
         pip install -r requirements.txt
         playwright install chromium
-
-    - name: Raporu İndir
+    - name: Raporları Kontrol Et ve İndir
       run: python downloader.py
-
-    - name: Raporu Mail At
+    - name: Mail Gönder
       uses: dawidd6/action-send-mail@v3
       with:
         server_address: smtp.gmail.com
         server_port: 465
         username: ${{ secrets.MAIL_USER }}
         password: ${{ secrets.MAIL_PASS }}
-        subject: "📊 Günlük Garanti Yatırım Raporu - $(date +'%d.%m.%Y')"
+        subject: "📊 Finansal Rapor Güncellemesi - $(date +'%d.%m.%Y')"
+        to: ${{ secrets.MAIL_USER }}
+        from: "Finansal Bot"
+        body: "Bugüne ait yeni raporlar ekte yer almaktadır. Eğer ek yoksa henüz yeni rapor yayınlanmamış demektir."
+        attachments: "*.pdf"        subject: "📊 Günlük Garanti Yatırım Raporu - $(date +'%d.%m.%Y')"
         to: ${{ secrets.MAIL_USER }}
         from: "Finansal Otomasyon Botu"
         body: "Günlük piyasa özeti raporun ekte yer almaktadır. İşlem tamamlandığı için dosya sunucudan silinmiştir."

@@ -1,0 +1,38 @@
+name: Garanti Rapor Botu
+
+on:
+  schedule:
+    # Hafta içi her sabah TR saatiyle 10:10'da çalışır
+    - cron: '10 07 * * 1-5'
+  workflow_dispatch: # İstediğimiz an manuel çalıştırmak için buton çıkarır
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Kodu kopyala
+      uses: actions/checkout@v4
+
+    - name: Python Kur
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Kütüphaneleri Yükle
+      run: |
+        pip install -r requirements.txt
+        playwright install chromium
+
+    - name: Botu Çalıştır
+      run: python downloader.py
+
+    - name: Raporu Repo'ya Kaydet
+      run: |
+        git config --global user.name 'GitHub Action Bot'
+        git config --global user.email 'action@github.com'
+        git add .
+        git commit -m "Otomatik Rapor: $(date +'%Y-%m-%d')" || exit 0
+        git push

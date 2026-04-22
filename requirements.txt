@@ -1,2 +1,4 @@
-playwright==1.42.0
-requests==2.31.0
+requests
+playwright
+pdfplumber
+google-generativeai

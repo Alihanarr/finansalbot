@@ -19,16 +19,23 @@ TELEGRAM_TOKEN = clean_env("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = clean_env("TELEGRAM_CHAT_ID")
 
 # ==========================================
-# 2. MESAJ GÖNDERİMİ
+# 2. MESAJ GÖNDERİMİ (ESTETİK NUMARALANDIRMA)
 # ==========================================
 def send_telegram(message):
+    """Mesajı böler; 1. parçada numara yazmaz, sonrakilerde 'Devamı' yazar."""
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
     limit = 4000
     parts = [message[i:i+limit] for i in range(0, len(message), limit)]
     
     for idx, part in enumerate(parts):
-        p_info = f"*(Devamı {idx+1}/{len(parts)})*\n\n" if len(parts) > 1 else ""
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": p_info + part, "parse_mode": "Markdown"}
+        # Sadece 2. parçadan itibaren (idx > 0) numara koyuyoruz
+        header = f"*(Devamı {idx+1}/{len(parts)})*\n\n" if idx > 0 else ""
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID, 
+            "text": header + part, 
+            "parse_mode": "Markdown"
+        }
         try:
             resp = requests.post(api_url, json=payload, timeout=30)
             if resp.status_code != 200:
@@ -38,26 +45,25 @@ def send_telegram(message):
         time.sleep(1.5)
 
 # ==========================================
-# 3. GEMİNİ 2.5 ANALİZ MOTORU
+# 3. GEMİNİ 2.5 ANALİZ MOTORU (YÜKSEK KALİTE)
 # ==========================================
 def get_ai_analysis(pdf_text, prev_sum, r_type):
-    """Gemini 2.5 Flash kullanarak profesyonel analiz yapar."""
+    """Her iki rapor tipini de profesyonel formatta analiz eder."""
     try:
-        # 2.5 Flash modeline geçiş yapıyoruz
-        model_name = 'gemini-2.5-flash'
-        model = genai.GenerativeModel(model_name)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        # Başlık tipine göre dinamik başlık
+        header_title = "GÜNLÜK PIYASA ÖZETİ ANALİZİ" if "piyasa" in r_type.lower() else "GÜN ORTASI NOTLARI ANALİZİ"
         
-        header_title = r_type.upper() + " ANALİZİ"
         prompt = f"""
         Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için analiz yap.
         
         KURALLAR:
-        1. Başlık: **{header_title}**
-        2. Tarih: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
+        1. Mesaja doğrudan şu başlıkla başla: **{header_title}**
+        2. Altına: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
         3. Giriş nezaket cümlelerini ASLA KULLANMA.
-        4. TABLOLARI mutlaka ``` (triple backticks) içine al.
-        5. Başlıkları **KALIN** yap.
-        6. **📊 TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: Bu bölümü EN SONDA ayrı başlıkta yap.
+        4. TÜM TABLOLARI (Piyasa Verileri, Destek/Direnç, Ajanda vb.) mutlaka ``` (triple backticks) içine al.
+        5. Hisse önerilerini veya önemli seviyeleri **KALIN** yap.
+        6. **📊 TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: En sonda dünkü/sabahki verilerle farkları ayrı başlıkta açıkla.
         
         ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk veri kaydı."}
         METİN: {pdf_text[:15000]}
@@ -66,7 +72,6 @@ def get_ai_analysis(pdf_text, prev_sum, r_type):
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        # Eğer 2.5 hala 404 verirse listedeki ilk modeli otomatik seç
         return f"ERROR_CODE_GEMINI: {str(e)}"
 
 # ==========================================
@@ -86,7 +91,6 @@ def process_automation():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
         
-        # URL TERTEMİZ TANIMLANDI
         site_url = "https://www.garantibbvayatirim.com.tr/arastirma-raporlari"
         print(f"--- Siteye Gidiliyor: {site_url} ---")
         
@@ -119,7 +123,7 @@ def process_automation():
                                     send_telegram(analysis)
                                     history[f"{report_key}_LAST_DATE"] = bugun_sayi
                                     history[f"{report_key}_SUMMARY"] = analysis
-                                    print(f"--- {target_title} BAŞARIYLA TAMAMLANDI ---")
+                                    print(f"--- {target_title} TAMAMLANDI ---")
                                 break
         except Exception as e:
             print(f"KRİTİK HATA: {e}")

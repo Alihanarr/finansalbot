@@ -18,40 +18,28 @@ def send_telegram(message):
 
 def get_ai_analysis(current_pdf_text, previous_summary, report_type):
     model = genai.GenerativeModel('gemini-1.5-flash')
-    
     prompt = f"""
-    Sen üst düzey bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için aşağıdaki {report_type} raporunu analiz et.
-    
-    FORMAT ŞARTLARI:
-    1. MANŞET: En kritik gelişmeyi vurgulayan iddialı bir başlık ve 2 cümlelik özet.
-    2. KÜRESEL & MAKRO: Jeopolitik riskler, faiz beklentileri ve emtia yorumları.
-    3. TEKNİK SEVİYELER: BIST100 ve VİOP için destek/direnç noktaları.
-    4. ÖNEMLİ HİSSE HABERLERİ: Rapordaki (+), (-) ve (=) işaretli haberleri filtrele. Yanlarına 📈 (+) veya 📉 (-) koy ve 'Yükseliş/Düşüş Bekleniyor' notu ekle.
-    5. TREND & KIYASLAMA: Aşağıdaki 'Önceki Rapor Özeti' ile karşılaştırarak; teknik seviye, haber akışı veya sinyal değişimlerini belirt.
-
-    ÖNCEKİ RAPOR ÖZETİ (KIYASLAMA İÇİN):
-    {previous_summary if previous_summary else "İlk rapor, kıyaslama verisi yok."}
-
-    GÜNCEL RAPOR METNİ:
-    {current_pdf_text[:12000]}
+    Sen üst düzey bir finansal analistsin. Bir İşletme Mühendisi için aşağıdaki {report_type} raporunu analiz et.
+    FORMAT: 1.MANŞET, 2.KÜRESEL, 3.TEKNİK, 4.📈/📉 HİSSE HABERLERİ, 5.TREND & KIYASLAMA.
+    KIYASLAMA VERİSİ: {previous_summary if previous_summary else "İlk rapor."}
+    METİN: {current_pdf_text[:12000]}
     """
-    
     response = model.generate_content(prompt)
     return response.text
 
 def process_automation():
-    targets = {
-        "günlük piyasa özeti": "SABAH_RAPORU",
-        "gün ortası notları": "OGLE_RAPORU"
-    }
-    bugun = datetime.now().strftime("%d.%m.%Y")
-    history_file = "history.json"
+    targets = {"günlük piyasa özeti": "SABAH_RAPORU", "gün ortası notları": "OGLE_RAPORU"}
     
-    if os.path.exists(history_file):
-        with open(history_file, "r") as f:
-            history = json.load(f)
-    else:
-        history = {}
+    # TARİH FORMATLARI
+    bugun_sayi = datetime.now().strftime("%d.%m.%Y") # 22.04.2026
+    bugun_gun = datetime.now().strftime("%d ") # 22 
+    aylar = {"01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs","06":"Haziran",
+             "07":"Temmuz","08":"Ağustos","09":"Eylül","10":"Ekim","11":"Kasım","12":"Aralık"}
+    ay_ismi = aylar[datetime.now().strftime("%m")] # Nisan
+    bugun_metin = f"{bugun_gun}{ay_ismi}".lower() # 22 nisan
+    
+    history_file = "history.json"
+    history = json.load(open(history_file)) if os.path.exists(history_file) else {}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -59,35 +47,35 @@ def process_automation():
         page.goto("https://www.garantibbvayatirim.com.tr/arastirma-raporlari", wait_until="networkidle")
         items = page.query_selector_all(".reports-list-item")
         
+        print(f"--- Arama Başlatıldı: {bugun_sayi} / {bugun_metin} ---")
+
         for target_title, report_key in targets.items():
+            found = False
             for item in items:
-                item_text = item.inner_text().lower()
-                if target_title in item_text and bugun in item_text:
-                    filename = f"{report_key}_{bugun}.pdf"
-                    
-                    if history.get(f"{report_key}_LAST_DATE") != bugun:
-                        report_url = item.query_selector("a.report-download").get_attribute("href")
-                        if not report_url.startswith("http"):
-                            report_url = "https://www.garantibbvayatirim.com.tr" + report_url
+                text = item.inner_text().lower()
+                if target_title in text and (bugun_sayi in text or bugun_metin in text):
+                    filename = f"{report_key}_{bugun_sayi}.pdf"
+                    if history.get(f"{report_key}_LAST_DATE") != bugun_sayi:
+                        print(f"BULDUM: {target_title}")
+                        url = item.query_selector("a.report-download").get_attribute("href")
+                        if not url.startswith("http"): url = "https://www.garantibbvayatirim.com.tr" + url
                         
-                        resp = requests.get(report_url)
-                        with open(filename, "wb") as f:
-                            f.write(resp.content)
+                        resp = requests.get(url)
+                        with open(filename, "wb") as f: f.write(resp.content)
                         
                         with pdfplumber.open(filename) as pdf:
-                            current_text = "".join(page.extract_text() for page in pdf.pages[:4])
+                            raw_text = "".join(p.extract_text() for p in pdf.pages[:4])
                         
-                        prev_summary = history.get(f"{report_key}_SUMMARY", "")
-                        analysis = get_ai_analysis(current_text, prev_summary, target_title)
-                        
+                        analysis = get_ai_analysis(raw_text, history.get(f"{report_key}_SUMMARY", ""), target_title)
                         send_telegram(analysis)
                         
-                        history[f"{report_key}_LAST_DATE"] = bugun
+                        history[f"{report_key}_LAST_DATE"] = bugun_sayi
                         history[f"{report_key}_SUMMARY"] = analysis
-                        
-                        with open(history_file, "w") as f:
-                            json.dump(history, f)
+                        found = True
                         break
+            if not found: print(f"HENÜZ YOK: {target_title}")
+        
+        with open(history_file, "w") as f: json.dump(history, f)
         browser.close()
 
 if __name__ == "__main__":

@@ -13,29 +13,27 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 def send_telegram(message):
-    """Mesajı parçalara bölerek ve Markdown formatıyla Telegram'a gönderir."""
+    """Mesajı parçalara böler ve Markdown formatıyla Telegram'a gönderir."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # Telegram 4096 karakter sınırı olduğu için 4000'erlik parçalara bölüyoruz
+    # Parçalara bölme (Part X yazısı kaldırıldı)
     limit = 4000
     parts = [message[i:i+limit] for i in range(0, len(message), limit)]
     
-    for idx, part in enumerate(parts):
-        # Eğer birden fazla parça varsa başına ek bilgi koyalım
-        header = f"*(Parça {idx+1}/{len(parts)})*\n\n" if len(parts) > 1 else ""
+    for part in parts:
         payload = {
             "chat_id": TELEGRAM_CHAT_ID, 
-            "text": header + part, 
+            "text": part, 
             "parse_mode": "Markdown"
         }
         try:
             resp = requests.post(url, json=payload)
             if resp.status_code != 200:
-                # Markdown hatası olursa düz metin olarak tekrar dene
+                # Markdown hatası (genelde karakterlerden dolayı) olursa düz metin dener
                 requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": part})
         except Exception as e:
             print(f"Telegram hatası: {e}")
-        time.sleep(1) # Mesajların sırasının karışmaması için kısa bekleme
+        time.sleep(1.5) # Mesaj sırası için bekleme
 
 def get_ai_analysis(current_pdf_text, previous_summary, report_type):
     try:
@@ -43,20 +41,26 @@ def get_ai_analysis(current_pdf_text, previous_summary, report_type):
         selected = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in available_models else available_models[0]
         
         model = genai.GenerativeModel(selected)
-        bugun = datetime.now().strftime("%d %B %Y") # Gemini'nin Türkçe ay ismini doğru kullanması için
+        header_title = report_type.upper() + " ANALİZİ"
         
         prompt = f"""
         Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için bu raporu analiz et.
         
-        ÖNEMLİ KURALLAR:
-        1. Asla 'Sayın İşletme Mühendisi' veya 'Merhaba' gibi giriş cümleleri kullanma.
-        2. Doğrudan şu başlıkla başla: '*{datetime.now().strftime("%d.%m.%Y")} tarihli {report_type} raporu*'
-        3. Tüm ana başlıkları ve önemli finansal terimleri (BIST100, faiz oranı, hisse kodları vb.) çift yıldız (**Örn**) kullanarak KALIN yaz.
-        4. Hisse haberlerini 📈 (+) veya 📉 (-) şeklinde gruplandır.
-        5. Teknik seviyeleri tablo gibi düzenli göster.
+        ÖNEMLİ GÖRSEL KURALLAR:
+        1. Mesaja doğrudan şu başlıkla başla: *{header_title}*
+        2. Altına şu alt başlığı ekle: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
+        3. TABLOLARI DÜZELT: Tüm piyasa verilerini ve ajanda tablolarını ``` (triple backticks) içine alarak sabit genişlikli (monospace) formatta yaz. Böylece sütunlar Telegram'da hizalı görünür.
+        4. ÖNEMLİ: Tüm ana başlıkları çift yıldız (Örn: **Piyasa Verileri**) ile kalın yap.
         
-        KIYASLAMA VERİSİ: {previous_summary if previous_summary else "İlk veri."}
-        METİN: {current_pdf_text[:12000]}
+        İÇERİK PLANI:
+        - Özet ve Genel Bakış
+        - Piyasa Verileri (Tablo formatında ``` içinde)
+        - Günlük Ajanda (Tablo formatında ``` içinde)
+        - Piyasaların Gündemi ve Yorumlar
+        - **TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: Bu bölümü en sonda ayrı bir başlık olarak yap. Önceki özetle ne değişti (risk iştahı, teknik seviyelerdeki kaymalar vb.) net belirt.
+        
+        ÖNCEKİ ÖZET VERİSİ: {previous_summary if previous_summary else "İlk veri kaydı."}
+        RAPOR METNİ: {current_pdf_text[:12000]}
         """
         
         response = model.generate_content(prompt)
@@ -80,7 +84,7 @@ def process_automation():
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
         page = context.new_page()
         
-        page.goto("https://www.garantibbvayatirim.com.tr/arastirma-raporlari", wait_until="domcontentloaded", timeout=60000)
+        page.goto("[https://www.garantibbvayatirim.com.tr/arastirma-raporlari](https://www.garantibbvayatirim.com.tr/arastirma-raporlari)", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(10000)
         
         items = page.query_selector_all(".reports-list-item")
@@ -94,7 +98,7 @@ def process_automation():
                         link = item.query_selector("a.report-download")
                         if link:
                             url = link.get_attribute("href")
-                            if not url.startswith("http"): url = "https://www.garantibbvayatirim.com.tr" + url
+                            if not url.startswith("http"): url = "[https://www.garantibbvayatirim.com.tr](https://www.garantibbvayatirim.com.tr)" + url
                             
                             resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
                             temp_pdf = f"temp_{report_key}.pdf"
@@ -106,8 +110,10 @@ def process_automation():
                             analysis = get_ai_analysis(raw_text, history.get(f"{report_key}_SUMMARY", ""), target_title)
                             send_telegram(analysis)
                             
-                            history[f"{report_key}_LAST_DATE"] = bugun_sayi
-                            history[f"{report_key}_SUMMARY"] = analysis
+                            # Sadece kota hatası almadıysak hafızaya kaydet
+                            if "429" not in analysis:
+                                history[f"{report_key}_LAST_DATE"] = bugun_sayi
+                                history[f"{report_key}_SUMMARY"] = analysis
                             break
         
         with open(history_file, "w") as f:

@@ -9,7 +9,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Buradaki permission satırı Exit Code 128'i çözmek için çok kritik
     permissions:
       contents: write
 
@@ -30,28 +29,27 @@ jobs:
     - name: Raporlari Kontrol Et ve Indir
       run: python downloader.py
 
-    - name: Mail Gonder
+    - name: Mail Gonder (Sadece Rapor Varsa)
+      # EĞER PDF DOSYASI YOKSA BU ADIM ÇALIŞMAYACAK
+      if: hashFiles('*.pdf') != ''
       uses: dawidd6/action-send-mail@v3
       with:
         server_address: smtp.gmail.com
         server_port: 465
         username: ${{ secrets.MAIL_USER }}
         password: ${{ secrets.MAIL_PASS }}
-        subject: "📊 Finansal Rapor Guncellemesi - $(date +'%d.%m.%Y')"
+        subject: "📊 Yeni Finansal Rapor - $(date +'%d.%m.%Y')"
         to: ${{ secrets.MAIL_USER }}
         from: "Finansal Bot"
-        body: "Yeni raporunuz ektedir. Eger ek yoksa yeni rapor yayinlanmamis demektir."
+        body: "Alihan selam, yeni raporun ekte yer almaktadir."
         attachments: "*.pdf"
-      # Sadece PDF dosyası varsa mail atmaya çalışması için:
-      continue-on-error: true 
 
     - name: Hafizayi Guncelle (history.txt dosyasini kaydet)
       run: |
         git config --global user.name 'GitHub Action Bot'
         git config --global user.email 'action@github.com'
-        # history.txt yoksa oluşturalım, varsa dokunmayalım
         touch history.txt
         git add history.txt
-        # Değişiklik varsa commitle, yoksa hata verme (|| true)
+        # Değişiklik varsa kaydet, yoksa sessizce geç
         git commit -m "Hafiza guncellendi: $(date +'%d.%m.%Y')" || true
         git push

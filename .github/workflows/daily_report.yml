@@ -1,10 +1,57 @@
-- name: Hafızayı Güncelle (history.txt dosyasını kaydet)
+name: Garanti Rapor Botu
+
+on:
+  schedule:
+    # Hafta içi: 10:10, 12:10, 13:10, 14:10, 15:10, 16:10 (TR saati)
+    - cron: '10 07,09,10,11,12,13 * * 1-5'
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Buradaki permission satırı Exit Code 128'i çözmek için çok kritik
+    permissions:
+      contents: write
+
+    steps:
+    - name: Kodu kopyala
+      uses: actions/checkout@v4
+
+    - name: Python Kur
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Kütüphaneleri Yukle
+      run: |
+        pip install -r requirements.txt
+        playwright install chromium
+
+    - name: Raporlari Kontrol Et ve Indir
+      run: python downloader.py
+
+    - name: Mail Gonder
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 465
+        username: ${{ secrets.MAIL_USER }}
+        password: ${{ secrets.MAIL_PASS }}
+        subject: "📊 Finansal Rapor Guncellemesi - $(date +'%d.%m.%Y')"
+        to: ${{ secrets.MAIL_USER }}
+        from: "Finansal Bot"
+        body: "Yeni raporunuz ektedir. Eger ek yoksa yeni rapor yayinlanmamis demektir."
+        attachments: "*.pdf"
+      # Sadece PDF dosyası varsa mail atmaya çalışması için:
+      continue-on-error: true 
+
+    - name: Hafizayi Guncelle (history.txt dosyasini kaydet)
       run: |
         git config --global user.name 'GitHub Action Bot'
         git config --global user.email 'action@github.com'
-        # Eğer dosya yoksa oluştur (hata vermemesi için)
-        touch history.txt 
+        # history.txt yoksa oluşturalım, varsa dokunmayalım
+        touch history.txt
         git add history.txt
-        # Değişiklik yoksa bile hata verme (|| true kısmı bu işe yarar)
-        git commit -m "Hafıza güncellendi: $(date +'%d.%m.%Y')" || true
+        # Değişiklik varsa commitle, yoksa hata verme (|| true)
+        git commit -m "Hafiza guncellendi: $(date +'%d.%m.%Y')" || true
         git push

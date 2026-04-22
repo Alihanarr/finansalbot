@@ -2,15 +2,13 @@ name: Garanti Rapor Botu
 
 on:
   schedule:
-    # Hafta içi her sabah TR saatiyle 10:10'da çalışır
+    # Hafta içi her sabah TR saatiyle 10:10'da çalışır (UTC 07:10)
     - cron: '10 07 * * 1-5'
-  workflow_dispatch: # İstediğimiz an manuel çalıştırmak için buton çıkarır
+  workflow_dispatch: # Manuel çalıştırma butonu
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
     - name: Kodu kopyala
@@ -21,18 +19,27 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Kütüphaneleri Yükle
+    - name: Kütüphaneleri ve Tarayıcıyı Yükle
       run: |
         pip install -r requirements.txt
         playwright install chromium
 
-    - name: Botu Çalıştır
+    - name: Raporu İndir
       run: python downloader.py
 
-    - name: Raporu Repo'ya Kaydet
-      run: |
-        git config --global user.name 'GitHub Action Bot'
-        git config --global user.email 'action@github.com'
-        git add .
-        git commit -m "Otomatik Rapor: $(date +'%Y-%m-%d')" || exit 0
-        git push
+    - name: Raporu Mail At
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 465
+        username: ${{ secrets.MAIL_USER }}
+        password: ${{ secrets.MAIL_PASS }}
+        subject: "📊 Günlük Garanti Yatırım Raporu - $(date +'%d.%m.%Y')"
+        to: ${{ secrets.MAIL_USER }}
+        from: "Finansal Otomasyon Botu"
+        body: "Günlük piyasa özeti raporun ekte yer almaktadır. İşlem tamamlandığı için dosya sunucudan silinmiştir."
+        attachments: "*.pdf"
+
+    # DİKKAT: 'git push' adımı kaldırıldı. 
+    # Bot işini bitirince rapor GitHub'da saklanmayacak, 
+    # sanal makineyle birlikte sonsuza dek silinecektir.

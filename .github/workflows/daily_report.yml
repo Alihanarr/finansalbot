@@ -2,8 +2,7 @@ name: Garanti Rapor Botu
 
 on:
   schedule:
-    # Hafta içi: 10:10, 12:10, 13:10, 14:10, 15:10, 16:10 (TR saati)
-    - cron: '10 07,09,10,11,12,13 * * 1-5'
+    - cron: '10 07,09,10,11,12,13 * * 1-5' # Hafta içi periyodik kontrol
   workflow_dispatch: 
 
 jobs:
@@ -26,30 +25,13 @@ jobs:
         pip install -r requirements.txt
         playwright install chromium
 
-    - name: Raporlari Kontrol Et ve Indir
+    - name: Raporlari Kontrol Et ve Analiz Et
       run: python downloader.py
 
-    - name: Mail Gonder (Sadece Rapor Varsa)
-      # EĞER PDF DOSYASI YOKSA BU ADIM ÇALIŞMAYACAK
-      if: hashFiles('*.pdf') != ''
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 465
-        username: ${{ secrets.MAIL_USER }}
-        password: ${{ secrets.MAIL_PASS }}
-        subject: "📊 Yeni Finansal Rapor - $(date +'%d.%m.%Y')"
-        to: ${{ secrets.MAIL_USER }}
-        from: "Finansal Bot"
-        body: "Alihan selam, yeni raporun ekte yer almaktadir."
-        attachments: "*.pdf"
-
-    - name: Hafizayi Guncelle (history.txt dosyasini kaydet)
+    - name: Hafizayi Guncelle
       run: |
         git config --global user.name 'GitHub Action Bot'
         git config --global user.email 'action@github.com'
-        touch history.txt
-        git add history.txt
-        # Değişiklik varsa kaydet, yoksa sessizce geç
+        git add history.json || true
         git commit -m "Hafiza guncellendi: $(date +'%d.%m.%Y')" || true
         git push

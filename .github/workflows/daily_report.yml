@@ -1,57 +1,10 @@
-name: Garanti Rapor Botu
-
-on:
-  schedule:
-    - cron: '10 07,09,10,11,12,13 * * 1-5'
-  workflow_dispatch: 
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # Dosyayı kaydedebilmesi için bu yetki şart
-
-    steps:
-    - name: Kodu kopyala
-      uses: actions/checkout@v4
-
-    - name: Python Kur
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Kütüphaneleri Yükle
-      run: |
-        pip install -r requirements.txt
-        playwright install chromium
-
-    - name: Raporları Kontrol Et
-      id: check_reports
-      run: python downloader.py
-
-    - name: Mail Gönder (Sadece Yeni Dosya Varsa)
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 465
-        username: ${{ secrets.MAIL_USER }}
-        password: ${{ secrets.MAIL_PASS }}
-        subject: "📊 Finansal Rapor Güncellemesi"
-        to: ${{ secrets.MAIL_USER }}
-        from: "Finansal Bot"
-        body: "Yeni raporunuz ektedir."
-        attachments: "*.pdf"
-      # Sadece PDF dosyası varsa mail atar
-      if: github.workspace != '' 
-
-    - name: Hafızayı Güncelle (history.txt dosyasını kaydet)
+- name: Hafızayı Güncelle (history.txt dosyasını kaydet)
       run: |
         git config --global user.name 'GitHub Action Bot'
         git config --global user.email 'action@github.com'
+        # Eğer dosya yoksa oluştur (hata vermemesi için)
+        touch history.txt 
         git add history.txt
-        git commit -m "Hafıza güncellendi: $(date +'%d.%m.%Y')" || exit 0
-        git push        subject: "Finansal Rapor Guncellemesi"
-        to: ${{ secrets.MAIL_USER }}
-        from: "Finansal Bot"
-        body: "Bugune ait yeni raporlar ekte yer almaktadir."
-        attachments: "*.pdf"
+        # Değişiklik yoksa bile hata verme (|| true kısmı bu işe yarar)
+        git commit -m "Hafıza güncellendi: $(date +'%d.%m.%Y')" || true
+        git push

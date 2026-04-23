@@ -12,7 +12,6 @@ import time
 # ==========================================
 def clean_env(key):
     val = os.environ.get(key, "")
-    # Secret içindeki parantez/tırnak hatalarını temizler
     return str(val).strip().replace("[", "").replace("]", "").replace("'", "").replace('"', "")
 
 genai.configure(api_key=clean_env("GEMINI_API_KEY"))
@@ -23,13 +22,20 @@ TELEGRAM_CHAT_ID = clean_env("TELEGRAM_CHAT_ID")
 # 2. MESAJ GÖNDERİMİ (ESTETİK NUMARALANDIRMA)
 # ==========================================
 def send_telegram(message):
-    """Mesajı böler; 1. parçada numara yazmaz, 2. ve sonrakilerde 'Devamı' yazar."""
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     limit = 4000
+
+    # Gemini bazen ### başlık üretir, Telegram bunu tanımaz → ** ile değiştir
+    message = message.replace("### ", "**").replace("## ", "**").replace("# ", "**")
+    # Madde işareti olarak * kullansa düzelt
+    message = "\n".join(
+        "- " + line[2:] if line.startswith("* ") else line
+        for line in message.split("\n")
+    )
+
     parts = [message[i:i+limit] for i in range(0, len(message), limit)]
-    
+
     for idx, part in enumerate(parts):
-        # İstediğin gibi: İlk parçada numara yok, 2. ve sonrakilerde (Devamı 2/3) yazar
         header = f"*(Devamı {idx+1}/{len(parts)})*\n\n" if idx > 0 else ""
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": header + part, "parse_mode": "Markdown"}
         try:
@@ -50,7 +56,7 @@ def get_ai_analysis(pdf_text, prev_sum, r_type):
     try:
         print("--- Gemini 2.5 Flash Analizi Başlatılıyor... ---")
         model = genai.GenerativeModel('gemini-2.5-flash')
-        
+
         is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
         display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PIYASA ÖZETİ ANALİZİ"
 
@@ -108,8 +114,7 @@ METİN: {pdf_text[:15000]}
 def process_automation():
     targets = {"günlük piyasa özeti": "SABAH_RAPORU", "gün ortası notları": "OGLE_RAPORU"}
     bugun_sayi = datetime.now().strftime("%d.%m.%Y")
-    
-    # Sitedeki farklı tarih yazımları için (22 Nisan gibi)
+
     aylar = {"01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs","06":"Haziran",
              "07":"Temmuz","08":"Ağustos","09":"Eylül","10":"Ekim","11":"Kasım","12":"Aralık"}
     gun = datetime.now().strftime('%d').lstrip('0')
@@ -121,15 +126,14 @@ def process_automation():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
-        
-        # URL'leri hiçbir parantez sızmayacak şekilde doğrudan yazdım
+
         site_url = "https://www.garantibbvayatirim.com.tr/arastirma-raporlari"
         print(f"--- 1. Siteye Gidiliyor: {bugun_sayi} ---")
-        
+
         try:
             page.goto(site_url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(10000)
-            
+
             items = page.query_selector_all(".reports-list-item")
             print(f"--- 2. Sitede {len(items)} adet rapor bulundu. ---")
 
@@ -137,7 +141,6 @@ def process_automation():
                 found = False
                 for item in items:
                     text = item.inner_text().lower()
-                    # Tarih ve başlık kontrolü
                     if target_title in text and (bugun_sayi in text or bugun_metin in text):
                         found = True
                         if history.get(f"{report_key}_LAST_DATE") != bugun_sayi:
@@ -147,17 +150,17 @@ def process_automation():
                                 pdf_url = link_elem.get_attribute("href")
                                 if not pdf_url.startswith("http"):
                                     pdf_url = "https://www.garantibbvayatirim.com.tr" + pdf_url
-                                
+
                                 print(f"İndiriliyor: {pdf_url}")
                                 resp = requests.get(pdf_url)
                                 with open("temp.pdf", "wb") as f: f.write(resp.content)
-                                
+
                                 with pdfplumber.open("temp.pdf") as pdf:
                                     raw_text = "".join(p.extract_text() for p in pdf.pages[:5])
-                                
+
                                 time.sleep(3)
                                 analysis = get_ai_analysis(raw_text, history.get(f"{report_key}_SUMMARY", ""), target_title)
-                                
+
                                 if "ERROR" not in analysis:
                                     send_telegram(analysis)
                                     history[f"{report_key}_LAST_DATE"] = bugun_sayi
@@ -170,7 +173,7 @@ def process_automation():
                         break
                 if not found:
                     print(f"BİLGİ: {target_title} için bugüne ait rapor listede görülmedi.")
-                    
+
         except Exception as e:
             print(f"!!! KRİTİK SİSTEM HATASI: {e}")
         finally:

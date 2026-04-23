@@ -1,42 +1,36 @@
 name: Garanti Rapor Botu
-
 on:
   schedule:
     - cron: '10 07,09,10,11,12,13 * * 1-5' # Hafta içi periyodik kontrol
   workflow_dispatch: 
-
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
     - name: Kodu kopyala
       uses: actions/checkout@v4
-
     - name: Python Kur
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-
     - name: Kütüphaneleri Yukle
       run: |
         pip install -r requirements.txt
         playwright install chromium
-
     - name: Raporlari Kontrol Et ve Analiz Et
-      # BURASI KRİTİK: Secrets'ları sistem değişkenine eşliyoruz
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: python downloader.py
-
     - name: Hafizayi Guncelle
       run: |
         git config --global user.name 'GitHub Action Bot'
         git config --global user.email 'action@github.com'
         git add history.json || true
-        git commit -m "Hafiza guncellendi: $(date +'%d.%m.%Y')" || true
+        echo "$(date)" >> .last_run
+        git add .last_run
+        git commit -m "Hafiza guncellendi: $(date +'%d.%m.%Y %H:%M')" || true
         git push

@@ -55,7 +55,7 @@ def send_telegram(message):
 def get_ai_analysis(pdf_text, prev_sum, r_type):
     try:
         print("--- Gemini 2.5 Flash Analizi Başlatılıyor... ---")
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite-preview-06-17')
 
         is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
         display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PIYASA ÖZETİ ANALİZİ"

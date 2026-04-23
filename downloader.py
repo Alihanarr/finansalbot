@@ -55,7 +55,7 @@ def send_telegram(message):
 def get_ai_analysis(pdf_text, prev_sum, r_type):
     try:
         print("--- Gemini 2.5 Flash Analizi Başlatılıyor... ---")
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
         display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PIYASA ÖZETİ ANALİZİ"
@@ -113,12 +113,12 @@ METİN: {pdf_text[:15000]}
 # ==========================================
 def process_automation():
     targets = {"günlük piyasa özeti": "SABAH_RAPORU", "gün ortası notları": "OGLE_RAPORU"}
-    bugun_sayi = "22.04.2026"
+    bugun_sayi = datetime.now().strftime("%d.%m.%Y")
 
     aylar = {"01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs","06":"Haziran",
              "07":"Temmuz","08":"Ağustos","09":"Eylül","10":"Ekim","11":"Kasım","12":"Aralık"}
     gun = datetime.now().strftime('%d').lstrip('0')
-    bugun_metin = "22 nisan"
+    bugun_metin = f"{gun} {aylar[datetime.now().strftime('%m')]}".lower()
 
     history_file = "history.json"
     history = json.load(open(history_file)) if os.path.exists(history_file) else {}

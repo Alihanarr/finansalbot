@@ -1,7 +1,5 @@
 name: Garanti Rapor Botu
 on:
-  schedule:
-    - cron: '*/30 7-13 * * 1-5' # Hafta içi periyodik kontrol
   workflow_dispatch: 
 jobs:
   build:

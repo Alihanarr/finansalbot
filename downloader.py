@@ -49,24 +49,52 @@ def send_telegram(message):
 def get_ai_analysis(pdf_text, prev_sum, r_type):
     try:
         print("--- Gemini 2.5 Flash Analizi Başlatılıyor... ---")
-        # 2026'nın en güncel modeli
         model = genai.GenerativeModel('gemini-2.5-flash')
-        display_title = "GÜNLÜK PIYASA ÖZETİ ANALİZİ" if "piyasa" in r_type.lower() else "GÜN ORTASI NOTLARI ANALİZİ"
         
-        prompt = f"""
-        Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için analiz yap.
-        
-        GÖRSEL KURALLAR:
-        1. Mesaja doğrudan şu başlıkla başla: **{display_title}**
-        2. Hemen altına: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
-        3. Giriş nezaket cümleleri (Merhaba, Sayın vb.) ASLA KULLANMA.
-        4. TABLOLARI JİLET GİBİ YAP: Tüm piyasa verilerini ``` (üç ters tırnak) içine al ve ASCII formatında ( | ve --- kullanarak) hizala.
-        5. Kritik haberleri **KALIN** başlıklarla ver.
-        6. **📊 TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: En sonda dünkü/sabahki farkları analiz et.
-        
-        ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk analiz verisi."}
-        METİN: {pdf_text[:15000]}
-        """
+        is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
+        display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PIYASA ÖZETİ ANALİZİ"
+
+        if is_ogle:
+            prompt = f"""
+Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi profesyonel için analiz yap.
+
+GÖRSEL KURALLAR — BUNLARA TAM UY:
+1. Mesaja DOĞRUDAN şu başlıkla başla: **{display_title}**
+2. Hemen altına italik: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
+3. Giriş nezaket cümleleri (Merhaba, Sayın vb.) ASLA KULLANMA.
+4. Tüm piyasa verilerini ve tabloları ``` (üç ters tırnak) içine al, ASCII tablo formatında ( | ve --- ile) hizala.
+5. Tablolarda sütunları düzgün hizala — her satır aynı genişlikte olsun.
+6. Bölüm başlıklarını **KALIN** yaz.
+7. Madde işaretlerinde * yerine - kullan (Telegram uyumu için).
+8. Senaryolar varsa her birini ayrı satırda, - ile listele, iç içe girinti kullanma.
+9. En sona **📊 ÖNCEKİ RAPORLA KIYASLAMA** bölümü ekle.
+
+ZORUNLU BÖLÜMLER (bu sırayla):
+**GENEL PİYASA GÖRÜNÜMÜ**
+**PİYASA VERİLERİ TABLOSU** (``` içinde ASCII tablo)
+**TEKNİK SEVİYELER** (BIST100, VİOP varsa)
+**GÜNDEM VE ÖNE ÇIKAN GELİŞMELER**
+**📊 ÖNCEKİ RAPORLA KIYASLAMA**
+
+ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk analiz verisi."}
+METİN: {pdf_text[:15000]}
+"""
+        else:
+            prompt = f"""
+Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için analiz yap.
+
+GÖRSEL KURALLAR:
+1. Mesaja doğrudan şu başlıkla başla: **{display_title}**
+2. Hemen altına: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
+3. Giriş nezaket cümleleri (Merhaba, Sayın vb.) ASLA KULLANMA.
+4. TABLOLARI JİLET GİBİ YAP: Tüm piyasa verilerini ``` (üç ters tırnak) içine al ve ASCII formatında ( | ve --- kullanarak) hizala.
+5. Kritik haberleri **KALIN** başlıklarla ver.
+6. **📊 TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: En sonda dünkü/sabahki farkları analiz et.
+
+ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk analiz verisi."}
+METİN: {pdf_text[:15000]}
+"""
+
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:

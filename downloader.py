@@ -160,47 +160,38 @@ METİN: {pdf_text[:15000]}
 NEWS_SOURCES = [
     {
         "name": "Bloomberg HT",
-        "url": "https://www.bloomberght.com/son-dakika",
-        "item_selector": "article, .news-item, .haber-item, .liste-item",
-        "title_selector": "h2, h3, .title, .baslik, a",
+        "url": "https://www.bloomberght.com/haberler",
         "link_prefix": "https://www.bloomberght.com",
     },
     {
-        "name": "Investing.com TR",
-        "url": "https://tr.investing.com/news/latest-news",
-        "item_selector": ".articleItem, article.js-article-item, .largeTitle",
-        "title_selector": "a.title, .articleDetails h3, a",
-        "link_prefix": "https://tr.investing.com",
+        "name": "Bloomberg HT Son Dakika",
+        "url": "https://www.bloomberght.com/sondakika",
+        "link_prefix": "https://www.bloomberght.com",
     },
     {
-        "name": "Doviz.com",
-        "url": "https://www.doviz.com/haberler/son-dakika/",
-        "item_selector": ".news-list-item, .haber-item, article",
-        "title_selector": "h2, h3, .title, a",
-        "link_prefix": "https://www.doviz.com",
-    },
-    {
-        "name": "Para.com.tr",
-        "url": "https://www.para.com.tr/haber/son-dakika/",
-        "item_selector": ".news-card, .haber-item, article, .card",
-        "title_selector": "h2, h3, .card-title, a",
-        "link_prefix": "https://www.para.com.tr",
+        "name": "Doviz.com Haberler",
+        "url": "https://haber.doviz.com",
+        "link_prefix": "https://haber.doviz.com",
     },
     {
         "name": "Ekonomim.com",
-        "url": "https://www.ekonomim.com/son-dakika",
-        "item_selector": ".news-item, article, .haber, .list-item",
-        "title_selector": "h2, h3, .title, a",
+        "url": "https://www.ekonomim.com",
         "link_prefix": "https://www.ekonomim.com",
+    },
+    {
+        "name": "Bigpara",
+        "url": "https://bigpara.hurriyet.com.tr/haberler/",
+        "link_prefix": "https://bigpara.hurriyet.com.tr",
     },
 ]
 
 FINANCE_KEYWORDS = [
     "borsa", "bist", "hisse", "dolar", "euro", "faiz", "enflasyon",
     "merkez bankası", "tcmb", "fed", "piyasa", "altın", "ekonomi",
-    "şirket", "kâr", "zarar", "ihracat", "ithalat", "büyüme", "gdp",
+    "şirket", "kâr", "kar", "zarar", "ihracat", "ithalat", "büyüme",
     "döviz", "tahvil", "bono", "repo", "swap", "petrol", "endeks",
-    "yatırım", "sermaye", "halka arz", "temettü", "bilanço"
+    "yatırım", "sermaye", "halka arz", "temettü", "bilanço", "bddk",
+    "spk", "imkb", "viop", "eurobond", "cds", "swap", "rezerv"
 ]
 
 # ==========================================
@@ -208,7 +199,10 @@ FINANCE_KEYWORDS = [
 # ==========================================
 def fetch_news_from_source(source, seen_links):
     new_items = []
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9",
+    }
 
     try:
         resp = requests.get(source["url"], headers=headers, timeout=15)
@@ -217,27 +211,18 @@ def fetch_news_from_source(source, seen_links):
             return []
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        items = soup.select(source["item_selector"])
 
-        if not items:
-            items = soup.find_all("a", href=True)
+        # Tüm linkleri tara
+        all_links = soup.find_all("a", href=True)
 
-        for item in items[:30]:
-            title_elem = item.select_one(source["title_selector"]) if hasattr(item, 'select_one') else None
-            if title_elem:
-                title = title_elem.get_text(strip=True)
-            else:
-                title = item.get_text(strip=True)
-
-            if item.name == "a":
-                href = item.get("href", "")
-            else:
-                a_tag = item.find("a", href=True)
-                href = a_tag.get("href", "") if a_tag else ""
+        for a_tag in all_links:
+            title = a_tag.get_text(strip=True)
+            href = a_tag.get("href", "")
 
             if not href or not title or len(title) < 20:
                 continue
 
+            # Tam URL oluştur
             if href.startswith("http"):
                 full_url = href
             elif href.startswith("/"):
@@ -245,11 +230,21 @@ def fetch_news_from_source(source, seen_links):
             else:
                 continue
 
+            # Aynı domain mi?
+            if source["link_prefix"].split("//")[1].split("/")[0] not in full_url:
+                continue
+
+            # Daha önce görüldü mü?
             if full_url in seen_links:
                 continue
 
+            # Finans haberi mi?
             title_lower = title.lower()
             if not any(kw in title_lower for kw in FINANCE_KEYWORDS):
+                continue
+
+            # Navigasyon linkleri filtrele (çok kısa veya genel)
+            if len(title) > 200:
                 continue
 
             new_items.append({
@@ -259,6 +254,8 @@ def fetch_news_from_source(source, seen_links):
             })
             seen_links.add(full_url)
 
+        # Her kaynaktan max 15 haber al
+        new_items = new_items[:15]
         print(f"--- {source['name']}: {len(new_items)} yeni haber ---")
 
     except Exception as e:
@@ -273,13 +270,15 @@ def find_duplicates_and_summarize(all_items):
     def similarity_score(t1, t2):
         words1 = set(t1.lower().split())
         words2 = set(t2.lower().split())
-        stop_words = {"ve", "ile", "bu", "bir", "da", "de", "mi", "mı", "mu", "mü", "için", "olan", "oldu"}
+        stop_words = {"ve", "ile", "bu", "bir", "da", "de", "mi", "mı", "mu", "mü",
+                      "için", "olan", "oldu", "the", "a", "an", "in", "of"}
         words1 -= stop_words
         words2 -= stop_words
         if not words1 or not words2:
             return 0
         return len(words1 & words2) / min(len(words1), len(words2))
 
+    # Haberleri grupla
     groups = []
     used = set()
 
@@ -296,6 +295,7 @@ def find_duplicates_and_summarize(all_items):
                 used.add(j)
         groups.append(group)
 
+    # AI için metin hazırla
     news_lines = []
     for group in groups:
         sources = list({g["source"] for g in group})
@@ -312,13 +312,13 @@ Aşağıdaki son dakika haberlerini değerlendir.
 KURALLAR:
 1. Her haber için piyasa etkisini belirle: (+) olumlu, (-) olumsuz
 2. Nötr/etkisiz haberleri ATLA
-3. Her önemli haber için format:
+3. Her önemli haber için şu formatı kullan:
    🟢 veya 🔴 *[KAYNAK(LAR)] BAŞLIK*
-   📝 Özet: 1-2 cümle açıklama
+   📝 Özet: 1-2 cümle kısa açıklama
    🔗 link
 
 4. Birden fazla kaynakta geçen haberlerde "✅ X kaynak onaylıyor" ifadesini koru
-5. Hiç önemli haber yoksa sadece yaz: YOK
+5. Hiç önemli haber yoksa sadece şunu yaz: YOK
 
 HABERLer:
 {news_text}

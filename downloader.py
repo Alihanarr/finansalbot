@@ -25,9 +25,7 @@ def send_telegram(message):
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     limit = 4000
 
-    # Gemini bazen ### başlık üretir, Telegram bunu tanımaz → ** ile değiştir
     message = message.replace("### ", "**").replace("## ", "**").replace("# ", "**")
-    # Madde işareti olarak * kullansa düzelt
     message = "\n".join(
         "- " + line[2:] if line.startswith("* ") else line
         for line in message.split("\n")
@@ -96,6 +94,7 @@ GÖRSEL KURALLAR:
 4. TABLOLARI JİLET GİBİ YAP: Tüm piyasa verilerini ``` (üç ters tırnak) içine al ve ASCII formatında ( | ve --- kullanarak) hizala.
 5. Kritik haberleri **KALIN** başlıklarla ver.
 6. **📊 TREND VE ÖNCEKİ RAPORLA KIYASLAMA**: En sonda dünkü/sabahki farkları analiz et.
+7. VERİLERİ ASLA DEĞİŞTİRME: PDF'deki sayıları olduğu gibi kullan, yuvarlama veya tahmin yapma.
 
 ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk analiz verisi."}
 METİN: {pdf_text[:15000]}
@@ -157,6 +156,11 @@ def process_automation():
 
                                 with pdfplumber.open("temp.pdf") as pdf:
                                     raw_text = "".join(p.extract_text() for p in pdf.pages[:5])
+
+                                # GEÇICI DEBUG - sonra sileriz
+                                print("=== HAM PDF METNİ ===")
+                                print(raw_text[:3000])
+                                # DEBUG SONU
 
                                 time.sleep(3)
                                 analysis = get_ai_analysis(raw_text, history.get(f"{report_key}_SUMMARY", ""), target_title)

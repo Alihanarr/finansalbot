@@ -38,17 +38,22 @@ def call_grok(system_prompt, user_prompt, max_tokens=4000):
             {"role": "user",   "content": user_prompt}
         ]
     }
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            resp = requests.post(GROK_API_URL, headers=headers, json=payload, timeout=60)
+            resp = requests.post(GROK_API_URL, headers=headers, json=payload, timeout=120)
             if resp.status_code == 200:
                 return resp.json()["choices"][0]["message"]["content"]
             elif resp.status_code == 429:
-                print(f"Grok kota hatası, 60sn bekleniyor... ({attempt+1}/3)")
-                time.sleep(60)
+                wait = 60 * (attempt + 1)
+                print(f"Grok kota hatası, {wait}sn bekleniyor... ({attempt+1}/4)")
+                time.sleep(wait)
             else:
                 print(f"!!! Grok API Hatası: {resp.status_code} — {resp.text[:200]}")
                 return f"ERROR_GROK: {resp.status_code}"
+        except requests.exceptions.Timeout:
+            wait = 30 * (attempt + 1)
+            print(f"!!! Grok timeout, {wait}sn bekleniyor... ({attempt+1}/4)")
+            time.sleep(wait)
         except Exception as e:
             print(f"!!! Grok bağlantı hatası: {e}")
             return f"ERROR_GROK: {e}"
@@ -92,13 +97,18 @@ def send_telegram(message):
 # 4. (=) FİLTRESİ — KOD SEVİYESİNDE
 # ==========================================
 def filter_neutral_items(text):
+    """
+    Şirket/haber satırlarında (=) olanları atar, (+) ve (-) olanları tutar.
+    Çok satırlı blokları birlikte işler.
+    """
     lines = text.split("\n")
     filtered = []
     skip_block = False
 
     for line in lines:
         stripped = line.strip()
-        is_new_item = stripped.startswith("-") or re.match(r'^[A-ZÇĞİÖŞÜ]{3,6}[:\s]', stripped)
+        # Yeni bir madde başlıyor mu? (hisse kodu veya - ile başlayan)
+        is_new_item = bool(re.match(r'^[A-ZÇĞİÖŞÜ]{3,6}[\s:]', stripped)) or stripped.startswith("-")
 
         if is_new_item:
             if "(=)" in stripped:
@@ -120,38 +130,80 @@ def filter_neutral_items(text):
 # ==========================================
 # 5. RAPOR ANALİZİ (GROK)
 # ==========================================
-def get_ai_analysis(pdf_text, prev_sum, r_type):
-    pdf_text = filter_neutral_items(pdf_text)
+def get_ai_analysis(pdf_text, history, report_key, r_type):
+    pdf_text_filtered = filter_neutral_items(pdf_text)
 
     is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
     display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PİYASA ÖZETİ ANALİZİ"
+    bugun = datetime.now().strftime("%d.%m.%Y")
 
-    system = "Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi profesyonel için analiz yapıyorsun."
+    # Kıyaslama geçmişlerini hazırla
+    if is_ogle:
+        prev_same   = history.get("OGLE_RAPORU_SUMMARY", "")      # dünkü öğle
+        prev_other  = history.get("SABAH_RAPORU_SUMMARY", "")     # bugünkü sabah
+        karsilastirma = f"""
+ÖNCEKİ ÖĞLE RAPORU (dünkü): {prev_same if prev_same else "Henüz yok."}
+BUGÜNKÜ SABAH RAPORU: {prev_other if prev_other else "Henüz yok."}
+"""
+    else:
+        prev_same   = history.get("SABAH_RAPORU_SUMMARY", "")     # dünkü sabah
+        prev_other  = history.get("OGLE_RAPORU_SUMMARY", "")      # dünkü öğle
+        karsilastirma = f"""
+ÖNCEKİ SABAH RAPORU (dünkü): {prev_same if prev_same else "Henüz yok."}
+ÖNCEKİ ÖĞLE RAPORU (dünkü): {prev_other if prev_other else "Henüz yok."}
+"""
+
+    system = "Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi profesyonel için analiz yapıyorsun. Türkçe yazıyorsun."
 
     user = f"""
-ÖNEMLİ: Sana gelen metin zaten filtrelenmiştir. Sadece (+) ve (-) işaretli gelişmeler var.
-(=) işaretli maddeler çıkarılmıştır, bunları kesinlikle ekleme.
+Aşağıdaki finansal raporu analiz et.
 
-GÖRSEL KURALLAR:
-1. Mesaja DOĞRUDAN şu başlıkla başla: **{display_title}**
-2. Hemen altına italik: _{datetime.now().strftime("%d.%m.%Y")} tarihli rapor özeti_
-3. Giriş nezaket cümleleri (Merhaba, Sayın vb.) ASLA KULLANMA.
-4. Tüm piyasa verilerini ``` içine al, ASCII tablo formatında ( | ve --- ile) hizala.
-5. Bölüm başlıklarını **KALIN** yaz. Madde işaretinde * yerine - kullan.
-6. En sona **📊 ÖNCEKİ RAPORLA KIYASLAMA** ekle.
+KRİTİK KURALLAR:
+1. PDF'deki sayıları OLDUĞU GİBİ kullan. Asla tahmin yapma, yuvarlama yapma, eski veriden üretme.
+   Dolar kuru, BIST, altın gibi veriler PDF'de ne yazıyorsa onu yaz.
+2. (=) işaretli şirket/haber maddeleri zaten çıkarıldı. Bunları ekleme.
+3. (+) ve (-) işaretli şirket haberlerini MUTLAKA dahil et ve neden önemli olduğunu açıkla.
+4. Rapor detaylı olsun — her bölümü doldur, kısa kesme.
 
-ZORUNLU BÖLÜMLER:
+FORMAT KURALLARI:
+- Mesaja DOĞRUDAN şu başlıkla başla: **{display_title}**
+- Hemen altına: _{bugun} tarihli rapor özeti_
+- Nezaket cümleleri (Merhaba, Sayın vb.) ASLA kullanma
+- Tüm sayısal verileri ``` içinde ASCII tablo olarak ver ( | ve --- kullan)
+- Bölüm başlıkları **KALIN**, maddeler - ile başlasın
+
+ZORUNLU BÖLÜMLER (hepsini doldur, kısa kesme):
+
 **GENEL PİYASA GÖRÜNÜMÜ**
-**PİYASA VERİLERİ TABLOSU**
-**TEKNİK SEVİYELER**
-**GÜNDEM — SADECE (+) ve (-) GELİŞMELER**
-**📊 ÖNCEKİ RAPORLA KIYASLAMA**
+Piyasanın genel seyri, öne çıkan tema ve riskler hakkında 3-5 cümle.
 
-ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk analiz."}
-METİN: {pdf_text[:15000]}
+**PİYASA VERİLERİ TABLOSU**
+PDF'deki güncel rakamlarla ASCII tablo. Mutlaka: BIST-100, USD/TL, EUR/TL, Altın, Petrol (varsa).
+
+**TEKNİK SEVİYELER**
+BIST-100 ve diğer enstrümanlar için destek/direnç seviyeleri, trend yorumu.
+
+**SEKTÖR VE ŞİRKET HABERLERİ — SADECE (+) ve (-)**
+Her madde için:
+- 🟢(+) veya 🔴(-) [HİSSE KODU]: Gelişme ne? Neden önemli? Kısa vadeli etkisi ne olabilir?
+
+**📊 ÖNCEKİ RAPORLARLA KIYASLAMA**
+{karsilastirma[:2000]}
+- Dünkü/önceki rapora göre ne değişti? (piyasa verileri, risk algısı, öne çıkan temalar)
+- Öğle raporu için: sabah raporuna göre gün içinde ne değişti?
+
+**🔮 KISA VADELİ AI YORUMU**
+Bu gelişmeler ışığında önümüzdeki 1-3 gün için:
+- Olası senaryolar (iyimser/kötümser)
+- Dikkat edilmesi gereken seviyeler ve gelişmeler
+- Genel pozisyon tavsiyesi (agresif değil, bilgilendirici)
+
+METİN:
+{pdf_text_filtered[:18000]}
 """
+
     print(f"--- Grok Rapor Analizi Başlatılıyor ({r_type}) ---")
-    result = call_grok(system, user)
+    result = call_grok(system, user, max_tokens=6000)
     return result
 
 # ==========================================
@@ -191,7 +243,7 @@ FINANCE_KEYWORDS = [
     "şirket", "kâr", "kar", "zarar", "ihracat", "ithalat", "büyüme",
     "döviz", "tahvil", "bono", "repo", "swap", "petrol", "endeks",
     "yatırım", "sermaye", "halka arz", "temettü", "bilanço", "bddk",
-    "spk", "imkb", "viop", "eurobond", "cds", "swap", "rezerv"
+    "spk", "viop", "eurobond", "cds", "rezerv", "enflasyon", "büyüme"
 ]
 
 # ==========================================
@@ -211,18 +263,15 @@ def fetch_news_from_source(source, seen_links):
             return []
 
         soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Tüm linkleri tara
         all_links = soup.find_all("a", href=True)
 
         for a_tag in all_links:
             title = a_tag.get_text(strip=True)
             href = a_tag.get("href", "")
 
-            if not href or not title or len(title) < 20:
+            if not href or not title or len(title) < 20 or len(title) > 200:
                 continue
 
-            # Tam URL oluştur
             if href.startswith("http"):
                 full_url = href
             elif href.startswith("/"):
@@ -230,21 +279,14 @@ def fetch_news_from_source(source, seen_links):
             else:
                 continue
 
-            # Aynı domain mi?
             if source["link_prefix"].split("//")[1].split("/")[0] not in full_url:
                 continue
 
-            # Daha önce görüldü mü?
             if full_url in seen_links:
                 continue
 
-            # Finans haberi mi?
             title_lower = title.lower()
             if not any(kw in title_lower for kw in FINANCE_KEYWORDS):
-                continue
-
-            # Navigasyon linkleri filtrele (çok kısa veya genel)
-            if len(title) > 200:
                 continue
 
             new_items.append({
@@ -254,7 +296,6 @@ def fetch_news_from_source(source, seen_links):
             })
             seen_links.add(full_url)
 
-        # Her kaynaktan max 15 haber al
         new_items = new_items[:15]
         print(f"--- {source['name']}: {len(new_items)} yeni haber ---")
 
@@ -270,15 +311,13 @@ def find_duplicates_and_summarize(all_items):
     def similarity_score(t1, t2):
         words1 = set(t1.lower().split())
         words2 = set(t2.lower().split())
-        stop_words = {"ve", "ile", "bu", "bir", "da", "de", "mi", "mı", "mu", "mü",
-                      "için", "olan", "oldu", "the", "a", "an", "in", "of"}
+        stop_words = {"ve", "ile", "bu", "bir", "da", "de", "mi", "mı", "mu", "mü", "için", "olan", "oldu"}
         words1 -= stop_words
         words2 -= stop_words
         if not words1 or not words2:
             return 0
         return len(words1 & words2) / min(len(words1), len(words2))
 
-    # Haberleri grupla
     groups = []
     used = set()
 
@@ -295,7 +334,6 @@ def find_duplicates_and_summarize(all_items):
                 used.add(j)
         groups.append(group)
 
-    # AI için metin hazırla
     news_lines = []
     for group in groups:
         sources = list({g["source"] for g in group})
@@ -305,20 +343,20 @@ def find_duplicates_and_summarize(all_items):
 
     news_text = "\n".join(news_lines)
 
-    system = "Sen kıdemli bir finansal analistsin."
+    system = "Sen kıdemli bir finansal analistsin. Türkçe yazıyorsun."
     user = f"""
 Aşağıdaki son dakika haberlerini değerlendir.
 
 KURALLAR:
 1. Her haber için piyasa etkisini belirle: (+) olumlu, (-) olumsuz
 2. Nötr/etkisiz haberleri ATLA
-3. Her önemli haber için şu formatı kullan:
+3. Her önemli haber için format:
    🟢 veya 🔴 *[KAYNAK(LAR)] BAŞLIK*
-   📝 Özet: 1-2 cümle kısa açıklama
+   📝 Özet: 1-2 cümle — ne oldu ve piyasaya etkisi ne?
    🔗 link
 
 4. Birden fazla kaynakta geçen haberlerde "✅ X kaynak onaylıyor" ifadesini koru
-5. Hiç önemli haber yoksa sadece şunu yaz: YOK
+5. Hiç önemli haber yoksa sadece yaz: YOK
 
 HABERLer:
 {news_text}
@@ -411,7 +449,7 @@ def process_automation():
                                 with pdfplumber.open("temp.pdf") as pdf:
                                     raw_text = "".join(
                                         p.extract_text(layout=True) or ""
-                                        for p in pdf.pages[:5]
+                                        for p in pdf.pages[:8]  # 5'ten 8'e çıkardık
                                     )
 
                                 print("=== HAM PDF (ilk 1000 karakter) ===")
@@ -420,7 +458,8 @@ def process_automation():
                                 time.sleep(3)
                                 analysis = get_ai_analysis(
                                     raw_text,
-                                    history.get(f"{report_key}_SUMMARY", ""),
+                                    history,
+                                    report_key,
                                     target_title
                                 )
 

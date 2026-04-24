@@ -94,7 +94,84 @@ def send_telegram(message):
         time.sleep(2)
 
 # ==========================================
-# 4. TACİRLER SABAH BÜLTENİ
+# 4. CANLI PİYASA VERİSİ (Yahoo Finance)
+# ==========================================
+def fetch_market_data():
+    """
+    Yahoo Finance üzerinden BIST100, BIST30, USD/TL, EUR/TL verilerini çeker.
+    Semboller: XU100.IS, XU030.IS, USDTRY=X, EURTRY=X
+    """
+    symbols = {
+        "BIST-100": "XU100.IS",
+        "BIST-30":  "XU030.IS",
+        "USD/TL":   "USDTRY=X",
+        "EUR/TL":   "EURTRY=X",
+    }
+    result = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    }
+
+    for name, symbol in symbols.items():
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=2d"
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                meta = data["chart"]["result"][0]["meta"]
+                price = meta.get("regularMarketPrice")
+                prev  = meta.get("chartPreviousClose") or meta.get("previousClose")
+                if price and prev and prev != 0:
+                    change_pct = ((price - prev) / prev) * 100
+                    result[name] = {
+                        "value":  round(price, 2),
+                        "change": round(change_pct, 2)
+                    }
+                    print(f"--- {name}: {price} ({change_pct:+.2f}%) ---")
+                else:
+                    result[name] = {"value": price, "change": None}
+            else:
+                print(f"!!! {name} Yahoo hatası: {resp.status_code}")
+                result[name] = {"value": None, "change": None}
+        except Exception as e:
+            print(f"!!! {name} veri hatası: {e}")
+            result[name] = {"value": None, "change": None}
+        time.sleep(0.3)
+
+    return result
+
+
+def format_market_table(market_data, prev_market_data=None):
+    """
+    Piyasa verisini tablo formatında string'e çevirir.
+    Değişim yoksa -- yazar.
+    prev_market_data: önceki rapordaki değerler (gün ortası için sabah değerleri)
+    """
+    lines = [
+        "```",
+        "| Enstrüman  | Değer     | Değişim  |",
+        "|------------|-----------|----------|",
+    ]
+    for name, d in market_data.items():
+        value = d.get("value")
+        change = d.get("change")
+
+        # Gün ortası için: değişim yoksa önceki raporla kıyasla
+        if change is None and prev_market_data and name in prev_market_data:
+            prev_val = prev_market_data[name].get("value")
+            if prev_val and value and prev_val != 0:
+                change = round(((value - prev_val) / prev_val) * 100, 2)
+
+        val_str    = f"{value:,.2f}".replace(",", ".") if value else "--"
+        change_str = f"{change:+.2f}%" if change is not None else "--"
+        lines.append(f"| {name:<10} | {val_str:<9} | {change_str:<8} |")
+
+    lines.append("```")
+    return "\n".join(lines)
+
+
+# ==========================================
+# 5. TACİRLER SABAH BÜLTENİ
 # ==========================================
 def fetch_tacirler_bulten(history, page):
     """
@@ -220,13 +297,19 @@ def fetch_tacirler_bulten(history, page):
         print("=== İLK 1500 KARAKTER ===")
         print(tam_metin[:1500])
 
+        # Canlı piyasa verisi çek
+        print("--- Canlı piyasa verisi çekiliyor ---")
+        market_data = fetch_market_data()
+        market_table = format_market_table(market_data)
+        history["SABAH_MARKET_DATA"] = market_data  # gün ortası için sakla
+
         # AI analizi
-        analysis = get_ai_analysis_tacirler(tam_metin, history, report_key)
+        analysis = get_ai_analysis_tacirler(tam_metin, history, report_key, market_table)
 
         if "ERROR" not in analysis:
             send_telegram(analysis)
             history[f"{report_key}_LAST_DATE"] = bugun_sayi
-            history[f"{report_key}_SUMMARY"] = analysis[:3000]  # özet olarak sakla
+            history[f"{report_key}_SUMMARY"] = analysis[:3000]
             print(f"--- Sabah raporu TAMAMLANDI ---")
         else:
             print(f"!!! Sabah raporu Analiz Hatası: {analysis}")
@@ -239,7 +322,7 @@ def fetch_tacirler_bulten(history, page):
 # ==========================================
 # 5. RAPOR ANALİZİ (GROK) — TACİRLER
 # ==========================================
-def get_ai_analysis_tacirler(metin, history, report_key):
+def get_ai_analysis_tacirler(metin, history, report_key, market_table=""):
     bugun = datetime.now().strftime("%d.%m.%Y")
 
     prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
@@ -265,17 +348,11 @@ Kullanıcıya sormak için yazmıyorsun, ona anlatıyorsun."""
 🌅 *GÜNLÜK PİYASA ÖZETİ*
 _{bugun}_
 
+İlk olarak 2-3 cümlelik samimi bir günaydın girişi yaz. "Günaydın, bugün piyasalar şöyle bir tabloyla açılıyor, gel beraber bakalım" havasında olsun. Resmi değil, sıcak ve doğal.
+
 **Piyasalar**
-Rapordaki gerçek sayıları kullan, üretme. BIST-100, BIST-30, USD/TL, EUR/TL mutlaka olsun, varsa diğerleri de ekle.
-Sadece kapanış ve günlük değişimi ver, tablo formatında:
-```
-| Enstrüman  | Kapanış   | Günlük  |
-|------------|-----------|---------|
-| BIST-100   | 14.335    | -0,28%  |
-| BIST-30    | ...       | ...     |
-| USD/TL     | ...       | ...     |
-| EUR/TL     | ...       | ...     |
-```
+Aşağıdaki tabloyu olduğu gibi koy, hiçbir şey ekleme, değiştirme, açıklama yapma:
+{market_table}
 
 **Güne Başlarken**
 Bugünün ana hikayesi ne? Jeopolitik, faiz, küresel piyasalar — neyin belirleyici olduğunu 3-4 cümleyle anlat.
@@ -319,7 +396,7 @@ BÜLTEN İÇERİĞİ:
 # ==========================================
 # 6. GÜN ORTASI RAPORU (GARANTİ BBVA)
 # ==========================================
-def get_ai_analysis_garanti(pdf_text, history):
+def get_ai_analysis_garanti(pdf_text, history, market_table=""):
     """Garanti gün ortası notları için Grok analizi."""
     bugun = datetime.now().strftime("%d.%m.%Y")
 
@@ -341,38 +418,31 @@ Resmi rapor dili kullanma. Zorlama kalıplardan kaçın."""
     user = f"""
 {bugun} tarihli Garanti BBVA gün ortası notlarını analiz et.
 
-Şu bölümleri sırayla yaz:
-
 🕐 *GÜN ORTASI NOTLARI*
 _{bugun}_
 
 **Piyasalar**
-PDF'deki gerçek sayıları kullan — tahmin yapma, üretme.
-Bulamazsan o satırı tabloya ekleme.
-```
-| Enstrüman  | Değer | Değişim |
-|------------|-------|---------|
-...
-```
+Aşağıdaki tabloyu olduğu gibi koy, hiçbir şey ekleme, değiştirme, açıklama yapma:
+{market_table}
 
 **Gün İçinde Ne Oldu?**
-Ana temayı 3-5 cümleyle anlat. Sabahtan bu yana ne değişti?
-Doğal dille konuş.
+Sabahtan bu yana ne değişti? 3-4 cümle yeter.
+"Petrol 100 doların üzerine çıktı, bu endeksi baskılamaya devam ediyor" gibi doğal bir dille.
+Açıklama yapma, direkt anlat.
 
 **Teknik Seviyeler**
-BIST-100 ve VİOP için destek/direnç kısa ve net.
+BIST-100 ve VİOP için destek/direnç — kısa ve net.
 
-**Şirket Haberleri**
-Olumlu için 🟢, olumsuz için 🔴.
-Her şirket için ne oldu, neden önemli, kısa vadede ne bekleniyor?
-Doğal anlat, işaret tekrarı yapma.
+**Öne Çıkan Şirket Haberleri**
+En çarpıcı 3-5 tanesini seç, hepsini yazma.
+🟢 veya 🔴, 1-2 cümle, doğal dille. İşaret tekrarı yapma.
 
 **Sabahla Kıyasla**
 {karsilastirma[:2000]}
-Varsa karşılaştır — "Sabaha göre dolar biraz daha sertleşmiş..." gibi doğal dille.
+Varsa karşılaştır, yoksa bu bölümü atla. "Sabaha göre dolar biraz daha sertleşmiş..." gibi.
 
-**Kısa Vadeli Beklenti**
-Günün geri kalanı ve yarın için sade yorum.
+**Günün Geri Kalanı**
+Kısa vadeli beklenti — yarım cümle bile yeter bazen.
 
 PDF METNİ:
 {pdf_text[:18000]}
@@ -431,8 +501,24 @@ def fetch_ogle_raporu(history, page):
                     print("=== ÖĞLE PDF (ilk 1000 karakter) ===")
                     print(raw_text[:1000])
 
+                    # Canlı piyasa verisi - sabah verisini de al
+                    print("--- Öğle canlı piyasa verisi çekiliyor ---")
+                    market_data = fetch_market_data()
+                    sabah_data = history.get("SABAH_MARKET_DATA", {})
+                    # Değişim: sabah değerlerine göre, yoksa Yahoo'nun kendi değişimini kullan
+                    for key in market_data:
+                        if market_data[key]["change"] is None and key in sabah_data:
+                            sabah_val = sabah_data[key].get("value")
+                            cur_val = market_data[key].get("value")
+                            if sabah_val and cur_val and sabah_val != 0:
+                                market_data[key]["change"] = round(((cur_val - sabah_val) / sabah_val) * 100, 2)
+                    # Sabah verisinde olmayan değişim için önceki günün öğle verisini kullan
+                    prev_ogle_data = history.get("OGLE_MARKET_DATA", {})
+                    market_table = format_market_table(market_data, prev_ogle_data)
+                    history["OGLE_MARKET_DATA"] = market_data
+
                     time.sleep(3)
-                    analysis = get_ai_analysis_garanti(raw_text, history)
+                    analysis = get_ai_analysis_garanti(raw_text, history, market_table)
 
                     if "ERROR" not in analysis:
                         send_telegram(analysis)

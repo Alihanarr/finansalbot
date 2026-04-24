@@ -155,12 +155,13 @@ def process_automation():
                                 with open("temp.pdf", "wb") as f: f.write(resp.content)
 
                                 with pdfplumber.open("temp.pdf") as pdf:
-                                    raw_text = "".join(p.extract_text() for p in pdf.pages[:5])
+                                    raw_text = "".join(
+                                        p.extract_text(layout=True) or ""
+                                        for p in pdf.pages[:5]
+                                    )
 
-                                # GEÇICI DEBUG - sonra sileriz
                                 print("=== HAM PDF METNİ ===")
                                 print(raw_text[:3000])
-                                # DEBUG SONU
 
                                 time.sleep(3)
                                 analysis = get_ai_analysis(raw_text, history.get(f"{report_key}_SUMMARY", ""), target_title)

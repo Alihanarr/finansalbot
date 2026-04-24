@@ -164,45 +164,59 @@ def fetch_tacirler_bulten(history, page):
             print("!!! Bülten linki bulunamadı.")
             return history
 
-        # Bülten sayfasına git ve içeriği oku
+        # Bülten sayfasına git, PDF linkini bul
         page.goto(bulten_link, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
 
         bulten_html = page.content()
         bulten_soup = BeautifulSoup(bulten_html, "html.parser")
 
-        # Tarih kontrolü — sayfadaki tarihi oku
+        # Tarih kontrolü
         tarih_elem = bulten_soup.find("h2", class_=lambda c: c and "fw-700" in c)
         if tarih_elem:
             sayfa_tarih = tarih_elem.get_text(strip=True)
             print(f"--- Sayfadaki tarih: {sayfa_tarih} ---")
-            # Bugünün tarihi değilse atla
             if bugun_sayi not in sayfa_tarih and bugun_sayi.replace(".", "") not in sayfa_tarih.replace(".", ""):
                 print(f"BİLGİ: Bülten tarihi {sayfa_tarih}, bugün değil. Atlanıyor.")
                 return history
 
-        # İçerikleri çek
-        sections = {}
-        for section in bulten_soup.find_all("section"):
-            baslik_elem = section.find("h2")
-            baslik = baslik_elem.get_text(strip=True) if baslik_elem else "Diğer"
-            icerik = section.get_text(separator="\n", strip=True)
-            sections[baslik] = icerik
+        # Detaylı PDF linkini bul
+        pdf_url = None
+        for a_tag in bulten_soup.find_all("a", href=True):
+            href = a_tag.get("href", "")
+            text = a_tag.get_text(strip=True).lower()
+            if ".pdf" in href.lower() or "detaylı pdf" in text or "pdf" in text:
+                pdf_url = href if href.startswith("http") else "https://tacirler.com.tr" + href
+                print(f"--- PDF linki bulundu: {pdf_url} ---")
+                break
 
-        # Piyasa verileri tablosunu da çek (PDF'deki gibi)
-        piyasa_verisi = ""
-        for elem in bulten_soup.find_all(["table", "div"], class_=lambda c: c and ("piyasa" in str(c).lower() or "table" in str(c).lower())):
-            piyasa_verisi += elem.get_text(separator=" | ", strip=True) + "\n"
+        if not pdf_url:
+            print("!!! PDF linki bulunamadı, HTML içeriğine geri dönülüyor.")
+            # Fallback: HTML içeriğini kullan
+            sections = {}
+            for section in bulten_soup.find_all("section"):
+                baslik_elem = section.find("h2")
+                baslik = baslik_elem.get_text(strip=True) if baslik_elem else "Diğer"
+                icerik = section.get_text(separator="\n", strip=True)
+                sections[baslik] = icerik
+            tam_metin = f"Tarih: {bugun_sayi}\n\n"
+            for baslik, icerik in sections.items():
+                tam_metin += f"=== {baslik} ===\n{icerik}\n\n"
+        else:
+            # PDF'i indir ve oku
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+            pdf_resp = requests.get(pdf_url, headers=headers, timeout=30)
+            with open("temp_tacirler.pdf", "wb") as f:
+                f.write(pdf_resp.content)
 
-        # Tüm metni birleştir
-        tam_metin = f"Tarih: {bugun_sayi}\n\n"
-        for baslik, icerik in sections.items():
-            tam_metin += f"=== {baslik} ===\n{icerik}\n\n"
+            with pdfplumber.open("temp_tacirler.pdf") as pdf:
+                tam_metin = ""
+                for p in pdf.pages:
+                    text = p.extract_text(layout=True) or ""
+                    tam_metin += text + "\n\n"
 
-        if piyasa_verisi:
-            tam_metin = f"PİYASA VERİLERİ:\n{piyasa_verisi}\n\n" + tam_metin
+            print(f"--- PDF okundu: {len(pdf.pages)} sayfa, {len(tam_metin)} karakter ---")
 
-        print(f"--- Bülten içeriği çekildi ({len(tam_metin)} karakter) ---")
         print("=== İLK 1500 KARAKTER ===")
         print(tam_metin[:1500])
 
@@ -239,53 +253,63 @@ Dünkü öğle raporu özeti:
 {prev_ogle[:1000] if prev_ogle else "Henüz yok."}
 """
 
-    system = """Sen deneyimli bir finansal analistsin. Kullanıcı seni her sabah piyasa özetini aktarmanı bekliyor.
-Yazın samimi, akıcı ve doğal Türkçe olsun — sanki bir meslektaşın sana durumu anlatıyormuş gibi.
-Resmi rapor dili kullanma. Zorlama kalıplardan kaçın. Kısa ve öz cümleler kur."""
+    system = """Sen deneyimli bir finansal analistsin. Her sabah kullanıcıya piyasa özetini aktarıyorsun.
+Doğal, akıcı Türkçe kullan. Sanki sabah kahveni içerken bir arkadaşına durumu anlatıyormuşsun gibi.
+Resmi rapor dili yok. Zorlama geçişler yok. Kullanıcının yazdığı mesajlara benzer, sade bir dil.
+Bölüm başlıkları kalın olsun ama girişe "Değerli yatırımcı" veya benzeri hiçbir şey yazma.
+Kullanıcıya sormak için yazmıyorsun, ona anlatıyorsun."""
 
     user = f"""
-{bugun} tarihli Tacirler Yatırım sabah bültenini analiz et.
-
-Şu bölümleri sırayla yaz:
+{bugun} tarihli Tacirler Yatırım günlük bültenini analiz et. Aşağıdaki sırayla yaz:
 
 🌅 *GÜNLÜK PİYASA ÖZETİ*
 _{bugun}_
 
 **Piyasalar**
-Rapordaki piyasa verilerini tabloda göster. Sadece metinde geçen gerçek sayıları kullan.
+Rapordaki gerçek sayıları kullan, üretme. BIST-100, BIST-30, USD/TL, EUR/TL mutlaka olsun, varsa diğerleri de ekle.
+Sadece kapanış ve günlük değişimi ver, tablo formatında:
 ```
-| Enstrüman     | Değer      | Değişim |
-|---------------|------------|---------|
-| BIST-100      | ...        | ...     |
-...
+| Enstrüman  | Kapanış   | Günlük  |
+|------------|-----------|---------|
+| BIST-100   | 14.335    | -0,28%  |
+| BIST-30    | ...       | ...     |
+| USD/TL     | ...       | ...     |
+| EUR/TL     | ...       | ...     |
 ```
 
 **Güne Başlarken**
-Ana temayı 3-5 cümleyle anlat. Jeopolitik, faiz, risk iştahı — ne öne çıkıyorsa.
-Doğal dille, "piyasalar şunu yapıyor, çünkü şu oluyor" mantığıyla.
+Bugünün ana hikayesi ne? Jeopolitik, faiz, küresel piyasalar — neyin belirleyici olduğunu 3-4 cümleyle anlat.
+"Hürmüz'deki gerginlik devam ediyor, bu da petrolü 100 dolar civarında tutuyor ve risk iştahını baskılıyor" gibi doğal bir dille.
 
-**Teknik Seviyeler**
-BIST-100 ve VİOP için destek/direnç kısa ve net.
+**Teknik Görünüm**
+BIST-100 için rapordaki destek/direnç seviyelerini ver. VİOP varsa onu da ekle.
+USD/TL ve EUR/TL için rapordaki teknik yorumu kısaca aktar — "45 seviyesi kritik, altında kalıcı düşüş zor görünüyor" gibi.
+Günlük teknik analiz bazlı hisse önerilerini de buraya ekle — hangi hisseler alım aralığında, hangilerinde satım hedefi ne?
 
-**Şirket Haberleri**
-Her şirket için ne oldu, neden önemli, kısa vadede ne beklenebilir?
-Olumlu gelişmeler için 🟢, olumsuz için 🔴 kullan.
-Doğal anlat — "CWENE bu çeyrekte karını ikiye katladı, güçlü büyüme devam ediyor..." gibi.
+**Global Piyasalar ve Makro**
+Rapordaki "Global Piyasalarda Öne Çıkanlar" ve "Ekonomi ve Politika Haberleri" bölümlerinden önemli olanları seç.
+Her başlık için 1-2 cümle yeter — "Tüketici güveni nisanda 85,5'e çıktı, beklentiler kısmen toparlıyor ama mevcut durum algısı hâlâ zayıf" gibi.
+Hepsini değil, gerçekten öne çıkanları al.
 
-**Ekonomi Haberleri**
-Önemli makro gelişmeleri kısaca özetle.
+**Kısa Vadeli Beklenti**
+Önümüzdeki 1-3 gün için ne bekleniyor? İyimser ve kötümser iki senaryo ver.
+Hangi seviye veya gelişme belirleyici olur?
 
 **Dünle Kıyasla**
 {karsilastirma[:2000]}
-Varsa karşılaştır, yoksa geç.
-Kıyaslarken doğal konuş: "Dünkü sabaha göre dolar biraz daha yukarı..."
+Varsa karşılaştır — "Dünkü sabaha göre dolar biraz daha sertleşmiş, risk iştahı aynı kötü seyriyor" gibi doğal bir dille.
+Veri yoksa bu bölümü atla, "henüz veri yok" yazma.
 
-**Kısa Vadeli Beklenti**
-Önümüzdeki 1-3 gün için sade yorum. İyimser/kötümser senaryo.
-Dikkat edilmesi gereken seviye veya gelişme var mı?
+**Öne Çıkan Şirket Haberleri**
+Rapordaki şirket haberlerinin hepsini değil, en çarpıcı 5-7 tanesini seç.
+Hangisi önemli, hangisi yatırımcıyı etkiler — bunu sen karar ver.
+Her biri için 1-2 cümle, doğal dille:
+🟢 CWENE karını yıllık bazda neredeyse ikiye katladı, güçlü bir çeyrek geçirmiş.
+🔴 SOKE net zararda, üstelik bir önceki çeyreğe göre de kötüleşmiş.
+Olumlu/olumsuz/karışık — nasıl hissettiriyorsa öyle yaz, işaret tekrarlama.
 
 BÜLTEN İÇERİĞİ:
-{metin[:18000]}
+{metin[:20000]}
 """
 
     print(f"--- Grok Tacirler Analizi Başlatılıyor ---")
@@ -564,19 +588,20 @@ def find_duplicates_and_summarize(all_items):
     news_text = "\n".join(news_lines)
 
     system = """Sen deneyimli bir finansal analistsin. Son dakika haberleri geliyor, hangisi piyasayı etkiler?
-Kısa, net, doğal Türkçe yaz."""
+Kısa, net, doğal Türkçe yaz. ASLA giriş cümlesi yazma, açıklama yapma, metodoloji anlatma.
+Direkt habere gir."""
 
     user = f"""
-Bu haberlere bak, sadece piyasayı gerçekten etkileyen olumlu (+) veya olumsuz (-) olanları yaz.
-Nötr/etkisiz haberleri atla.
+Aşağıdaki haberlere bak. Sadece piyasayı gerçekten etkileyen olumlu veya olumsuz olanları yaz.
+Nötr/etkisiz haberleri atla. Giriş cümlesi yazma, direkt haberlere başla.
 
-Her önemli haber için:
+Her önemli haber için bu format:
 🟢 veya 🔴 *Başlık*
-Ne anlama geliyor, piyasaya etkisi ne? (1-2 cümle, doğal dille)
+1-2 cümle — ne oldu, piyasaya etkisi ne?
 🔗 link
 
-Birden fazla kaynakta geçen haberlerde: "✅ X kaynak doğruluyor" ekle.
-Hiç önemli haber yoksa: YOK
+Birden fazla kaynakta geçen haberlerde "✅ X kaynak doğruluyor" ekle.
+Hiç önemli haber yoksa sadece: YOK
 
 Haberler:
 {news_text}

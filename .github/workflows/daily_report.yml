@@ -1,6 +1,6 @@
 name: Garanti Rapor Botu
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,7 +19,7 @@ jobs:
         playwright install chromium
     - name: Raporlari Kontrol Et ve Analiz Et
       env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: python downloader.py

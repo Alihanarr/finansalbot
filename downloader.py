@@ -94,20 +94,46 @@ def send_telegram(message):
         time.sleep(2)
 
 # ==========================================
-# 4. (=) FİLTRESİ — KOD SEVİYESİNDE
+# 4. PDF'DEN VERİ ÇEKME
+# ==========================================
+def extract_pdf_data(text):
+    """
+    PDF metninden sayısal piyasa verilerini regex ile çeker.
+    Bulunanları sözlük olarak döndürür.
+    """
+    data = {}
+
+    patterns = {
+        "BIST100":      r'(?:BIST[\s\-]*100|BİST[\s\-]*100)[^\d]*(\d{4,6}(?:[.,]\d+)?)',
+        "USDTRY":       r'(?:USD[\s/]*TL|USDTRY|\$/TL)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
+        "EURTRY":       r'(?:EUR[\s/]*TL|EURTRY|€/TL)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
+        "ALTIN":        r'(?:Alt[ıi]n[\s]*(?:Ons)?|XAU)[^\d]*(\d{1,5}(?:[.,]\d+)?)',
+        "PETROL":       r'(?:Ham Petrol|Brent|Petrol)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
+        "GOSTERGE_TH":  r'(?:Gösterge Tahvil|G[öo]sterge)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
+        "CDS_5Y":       r'(?:5Y CDS|CDS)[^\d]*(\d{2,4}(?:[.,]\d+)?)',
+    }
+
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            val = match.group(1).replace(",", ".")
+            data[key] = val
+            print(f"--- PDF Veri: {key} = {val} ---")
+        else:
+            data[key] = None
+
+    return data
+
+# ==========================================
+# 5. (=) FİLTRESİ — KOD SEVİYESİNDE
 # ==========================================
 def filter_neutral_items(text):
-    """
-    Şirket/haber satırlarında (=) olanları atar, (+) ve (-) olanları tutar.
-    Çok satırlı blokları birlikte işler.
-    """
     lines = text.split("\n")
     filtered = []
     skip_block = False
 
     for line in lines:
         stripped = line.strip()
-        # Yeni bir madde başlıyor mu? (hisse kodu veya - ile başlayan)
         is_new_item = bool(re.match(r'^[A-ZÇĞİÖŞÜ]{3,6}[\s:]', stripped)) or stripped.startswith("-")
 
         if is_new_item:
@@ -128,77 +154,94 @@ def filter_neutral_items(text):
     return "\n".join(filtered)
 
 # ==========================================
-# 5. RAPOR ANALİZİ (GROK)
+# 6. RAPOR ANALİZİ (GROK)
 # ==========================================
 def get_ai_analysis(pdf_text, history, report_key, r_type):
     pdf_text_filtered = filter_neutral_items(pdf_text)
+    market_data = extract_pdf_data(pdf_text)
 
     is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
-    display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PİYASA ÖZETİ ANALİZİ"
+    display_title = "🕐 GÜN ORTASI NOTLARI" if is_ogle else "🌅 GÜNLÜK PİYASA ÖZETİ"
     bugun = datetime.now().strftime("%d.%m.%Y")
 
-    # Kıyaslama geçmişlerini hazırla
+    # Piyasa verilerini tablo olarak hazırla
+    def fmt(v): return v if v else "raporda net görülemedi"
+    market_table = f"""
+BIST-100    : {fmt(market_data.get('BIST100'))}
+USD/TL      : {fmt(market_data.get('USDTRY'))}
+EUR/TL      : {fmt(market_data.get('EURTRY'))}
+Altın (Ons) : {fmt(market_data.get('ALTIN'))}
+Ham Petrol  : {fmt(market_data.get('PETROL'))}
+Gösterge Th.: {fmt(market_data.get('GOSTERGE_TH'))}
+5Y CDS      : {fmt(market_data.get('CDS_5Y'))}
+"""
+
+    # Kıyaslama geçmişi
     if is_ogle:
-        prev_same   = history.get("OGLE_RAPORU_SUMMARY", "")      # dünkü öğle
-        prev_other  = history.get("SABAH_RAPORU_SUMMARY", "")     # bugünkü sabah
+        prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
+        prev_ogle  = history.get("OGLE_RAPORU_SUMMARY", "")
         karsilastirma = f"""
-ÖNCEKİ ÖĞLE RAPORU (dünkü): {prev_same if prev_same else "Henüz yok."}
-BUGÜNKÜ SABAH RAPORU: {prev_other if prev_other else "Henüz yok."}
+Bugünkü sabah raporu özeti:
+{prev_sabah[:1500] if prev_sabah else "Henüz yok."}
+
+Dünkü öğle raporu özeti:
+{prev_ogle[:1000] if prev_ogle else "Henüz yok."}
 """
     else:
-        prev_same   = history.get("SABAH_RAPORU_SUMMARY", "")     # dünkü sabah
-        prev_other  = history.get("OGLE_RAPORU_SUMMARY", "")      # dünkü öğle
+        prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
+        prev_ogle  = history.get("OGLE_RAPORU_SUMMARY", "")
         karsilastirma = f"""
-ÖNCEKİ SABAH RAPORU (dünkü): {prev_same if prev_same else "Henüz yok."}
-ÖNCEKİ ÖĞLE RAPORU (dünkü): {prev_other if prev_other else "Henüz yok."}
+Dünkü sabah raporu özeti:
+{prev_sabah[:1500] if prev_sabah else "Henüz yok."}
+
+Dünkü öğle raporu özeti:
+{prev_ogle[:1000] if prev_ogle else "Henüz yok."}
 """
 
-    system = "Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi profesyonel için analiz yapıyorsun. Türkçe yazıyorsun."
+    system = """Sen deneyimli bir finansal analistsin. Kullanıcı seni her sabah ve öğlen bilgilendirmeni bekliyor.
+Yazın samimi, akıcı ve doğal Türkçe olsun — sanki bir meslektaşın sana durumu anlatıyormuş gibi.
+Resmi rapor dili kullanma. Zorlama kalıplardan kaçın. Kısa ve öz cümleler kur."""
 
     user = f"""
-Aşağıdaki finansal raporu analiz et.
+{bugun} tarihli {r_type} raporunu analiz et ve aşağıdaki formatta yaz.
 
-KRİTİK KURALLAR:
-1. PDF'deki sayıları OLDUĞU GİBİ kullan. Asla tahmin yapma, yuvarlama yapma, eski veriden üretme.
-   Dolar kuru, BIST, altın gibi veriler PDF'de ne yazıyorsa onu yaz.
-2. (=) işaretli şirket/haber maddeleri zaten çıkarıldı. Bunları ekleme.
-3. (+) ve (-) işaretli şirket haberlerini MUTLAKA dahil et ve neden önemli olduğunu açıkla.
-4. Rapor detaylı olsun — her bölümü doldur, kısa kesme.
+BAŞLIK OLARAK SADECE ŞU İKİ SATIRI YAZ, başka bir şey ekleme:
+{display_title}
+_{bugun}_
 
-FORMAT KURALLARI:
-- Mesaja DOĞRUDAN şu başlıkla başla: **{display_title}**
-- Hemen altına: _{bugun} tarihli rapor özeti_
-- Nezaket cümleleri (Merhaba, Sayın vb.) ASLA kullanma
-- Tüm sayısal verileri ``` içinde ASCII tablo olarak ver ( | ve --- kullan)
-- Bölüm başlıkları **KALIN**, maddeler - ile başlasın
+Sonra şu bölümleri sırayla yaz:
 
-ZORUNLU BÖLÜMLER (hepsini doldur, kısa kesme):
+**Genel Tablo**
+Koddan çektiğim bu verileri kullan — başka kaynak üretme:
+{market_table}
+Bu verileri ```...``` içinde düzenli tablo olarak göster.
+"raporda net görülemedi" yazanları tabloya dahil etme, sadece bulunanları yaz.
 
-**GENEL PİYASA GÖRÜNÜMÜ**
-Piyasanın genel seyri, öne çıkan tema ve riskler hakkında 3-5 cümle.
+**Piyasada Bugün Ne Var?**
+Rapordaki ana temayı 3-5 cümleyle anlat. Jeopolitik, faiz, risk iştahı — ne öne çıkıyorsa.
+Doğal dille, "piyasalar şunu yapıyor, çünkü şu oluyor" mantığıyla.
 
-**PİYASA VERİLERİ TABLOSU**
-PDF'deki güncel rakamlarla ASCII tablo. Mutlaka: BIST-100, USD/TL, EUR/TL, Altın, Petrol (varsa).
+**Teknik Seviyeler**
+BIST-100, VİOP ve varsa diğerleri için destek/direnç seviyelerini kısa ver.
+"14.200 altı zayıflık sinyali, 14.600 üzeri toparlanma..." gibi sade bir dille.
 
-**TEKNİK SEVİYELER**
-BIST-100 ve diğer enstrümanlar için destek/direnç seviyeleri, trend yorumu.
+**Şirket Haberleri**
+Sadece olumlu veya olumsuz gelişmeler var burada — nötr olanlar zaten çıkarıldı.
+Her hisse için: ne oldu, neden önemli, kısa vadede ne beklenebilir?
+Doğal anlat — "HEKTS bugün AR-GE belgesi aldı, bu teşviklere kapı açıyor..." gibi.
+🟢 olumlu, 🔴 olumsuz emoji kullan ama işareti tekrar etme.
 
-**SEKTÖR VE ŞİRKET HABERLERİ — SADECE (+) ve (-)**
-Her madde için:
-- 🟢(+) veya 🔴(-) [HİSSE KODU]: Gelişme ne? Neden önemli? Kısa vadeli etkisi ne olabilir?
-
-**📊 ÖNCEKİ RAPORLARLA KIYASLAMA**
+**Dünle Kıyasla**
 {karsilastirma[:2000]}
-- Dünkü/önceki rapora göre ne değişti? (piyasa verileri, risk algısı, öne çıkan temalar)
-- Öğle raporu için: sabah raporuna göre gün içinde ne değişti?
+Varsa kıyasla, yoksa "Karşılaştırmak için henüz yeterli veri yok, ilerleyen günlerde daha net olacak." de.
+Kıyaslarken doğal konuş: "Sabaha göre dolar biraz daha sertleşmiş...", "Dünkü öğleye kıyasla risk iştahı azalmış gibi görünüyor..."
 
-**🔮 KISA VADELİ AI YORUMU**
-Bu gelişmeler ışığında önümüzdeki 1-3 gün için:
-- Olası senaryolar (iyimser/kötümser)
-- Dikkat edilmesi gereken seviyeler ve gelişmeler
-- Genel pozisyon tavsiyesi (agresif değil, bilgilendirici)
+**Kısa Vadeli Beklenti**
+Önümüzdeki 1-3 gün için sade bir yorum. İyimser/kötümser iki senaryo, hangisi daha olası?
+Dikkat edilmesi gereken seviye veya gelişme var mı?
+"Şu an için temkinli durmak mantıklı..." veya "14.600 kırılırsa işler değişebilir..." gibi.
 
-METİN:
+RAPOR METNİ:
 {pdf_text_filtered[:18000]}
 """
 
@@ -207,7 +250,7 @@ METİN:
     return result
 
 # ==========================================
-# 6. HABER KAYNAKLARI
+# 7. HABER KAYNAKLARI
 # ==========================================
 NEWS_SOURCES = [
     {
@@ -243,11 +286,11 @@ FINANCE_KEYWORDS = [
     "şirket", "kâr", "kar", "zarar", "ihracat", "ithalat", "büyüme",
     "döviz", "tahvil", "bono", "repo", "swap", "petrol", "endeks",
     "yatırım", "sermaye", "halka arz", "temettü", "bilanço", "bddk",
-    "spk", "viop", "eurobond", "cds", "rezerv", "enflasyon", "büyüme"
+    "spk", "viop", "eurobond", "cds", "rezerv"
 ]
 
 # ==========================================
-# 7. HABER ÇEKME
+# 8. HABER ÇEKME
 # ==========================================
 def fetch_news_from_source(source, seen_links):
     new_items = []
@@ -305,7 +348,7 @@ def fetch_news_from_source(source, seen_links):
     return new_items
 
 # ==========================================
-# 8. ÇAKIŞMA TESPİTİ + AI ÖZET
+# 9. ÇAKIŞMA TESPİTİ + AI ÖZET
 # ==========================================
 def find_duplicates_and_summarize(all_items):
     def similarity_score(t1, t2):
@@ -338,34 +381,34 @@ def find_duplicates_and_summarize(all_items):
     for group in groups:
         sources = list({g["source"] for g in group})
         source_str = f"[{', '.join(sources)}]"
-        confirm_str = f" ✅ {len(sources)} kaynak onaylıyor" if len(sources) > 1 else ""
+        confirm_str = f" ✅ {len(sources)} kaynak" if len(sources) > 1 else ""
         news_lines.append(f"- {source_str}{confirm_str} {group[0]['title']} | {group[0]['url']}")
 
     news_text = "\n".join(news_lines)
 
-    system = "Sen kıdemli bir finansal analistsin. Türkçe yazıyorsun."
+    system = """Sen deneyimli bir finansal analistsin. Son dakika haberleri geliyor, hangisi piyasayı etkiler?
+Kısa, net, doğal Türkçe yaz. Resmi rapor dili kullanma."""
+
     user = f"""
-Aşağıdaki son dakika haberlerini değerlendir.
+Bu haberlere bak, sadece piyasayı gerçekten etkileyen (+) veya (-) olanları yaz.
+Nötr/etkisiz haberleri atla.
 
-KURALLAR:
-1. Her haber için piyasa etkisini belirle: (+) olumlu, (-) olumsuz
-2. Nötr/etkisiz haberleri ATLA
-3. Her önemli haber için format:
-   🟢 veya 🔴 *[KAYNAK(LAR)] BAŞLIK*
-   📝 Özet: 1-2 cümle — ne oldu ve piyasaya etkisi ne?
-   🔗 link
+Her önemli haber için:
+🟢 veya 🔴 *Başlık*
+Ne anlama geliyor, piyasaya etkisi ne? (1-2 cümle, doğal dille)
+🔗 link
 
-4. Birden fazla kaynakta geçen haberlerde "✅ X kaynak onaylıyor" ifadesini koru
-5. Hiç önemli haber yoksa sadece yaz: YOK
+Birden fazla kaynakta geçen haberlerde: "✅ X kaynak doğruluyor" ekle.
+Hiç önemli haber yoksa: YOK
 
-HABERLer:
+Haberler:
 {news_text}
 """
     print(f"--- {len(all_items)} haber ({len(groups)} grup) Grok'a gönderiliyor ---")
     return call_grok(system, user, max_tokens=2000)
 
 # ==========================================
-# 9. HABER MONİTÖRÜ
+# 10. HABER MONİTÖRÜ
 # ==========================================
 def run_news_monitor(history):
     print("\n========== HABER MONİTÖRÜ BAŞLADI ==========")
@@ -398,7 +441,7 @@ def run_news_monitor(history):
     return history
 
 # ==========================================
-# 10. ANA OTOMASYON
+# 11. ANA OTOMASYON
 # ==========================================
 def process_automation():
     targets = {"günlük piyasa özeti": "SABAH_RAPORU", "gün ortası notları": "OGLE_RAPORU"}
@@ -449,11 +492,11 @@ def process_automation():
                                 with pdfplumber.open("temp.pdf") as pdf:
                                     raw_text = "".join(
                                         p.extract_text(layout=True) or ""
-                                        for p in pdf.pages[:8]  # 5'ten 8'e çıkardık
+                                        for p in pdf.pages[:8]
                                     )
 
-                                print("=== HAM PDF (ilk 1000 karakter) ===")
-                                print(raw_text[:1000])
+                                print("=== HAM PDF (ilk 1500 karakter) ===")
+                                print(raw_text[:1500])
 
                                 time.sleep(3)
                                 analysis = get_ai_analysis(
@@ -485,7 +528,6 @@ def process_automation():
     # ---- HABER MONİTÖRÜ ----
     history = run_news_monitor(history)
 
-    # History kaydet
     with open(history_file, "w") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
     print("--- History kaydedildi ---")

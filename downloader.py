@@ -348,7 +348,10 @@ Kullanıcıya sormak için yazmıyorsun, ona anlatıyorsun."""
 🌅 *GÜNLÜK PİYASA ÖZETİ*
 _{bugun}_
 
-İlk olarak 2-3 cümlelik samimi bir günaydın girişi yaz. "Günaydın, bugün piyasalar şöyle bir tabloyla açılıyor, gel beraber bakalım" havasında olsun. Resmi değil, sıcak ve doğal.
+İlk satır olarak kısa ve net bir günaydın cümlesi yaz. Format tam olarak şöyle olsun:
+"Günaydın. Bugün [o günün en önemli gelişmesi veya piyasa teması 1 cümlede]."
+Örnek: "Günaydın. Bugün piyasalar Hürmüz gerginliğinin petrolü 100 doların üzerine taşımasıyla temkinli açılıyor."
+Sadece 1-2 cümle. Kahve, beraber bakalım gibi ifadeler yok. Profesyonel ama doğal.
 
 **Piyasalar**
 Aşağıdaki tabloyu olduğu gibi koy, hiçbir şey ekleme, değiştirme, açıklama yapma:
@@ -411,9 +414,10 @@ Dünkü öğle raporu özeti:
 {prev_ogle[:1000] if prev_ogle else "Henüz yok."}
 """
 
-    system = """Sen deneyimli bir finansal analistsin. Kullanıcı seni öğlen piyasa güncellemesini aktarmanı bekliyor.
-Yazın samimi, akıcı ve doğal Türkçe olsun — sanki bir meslektaşın sana durumu anlatıyormuş gibi.
-Resmi rapor dili kullanma. Zorlama kalıplardan kaçın."""
+    system = """Sen deneyimli bir finansal analistsin. Kullanıcıya öğlen piyasa güncellemesini aktarıyorsun.
+Dil profesyonel ama doğal olsun — ne çok resmi ne çok samimi.
+Asla açıklama yapma: "tabloyu olduğu gibi bıraktım", "PDF'e sadık kaldım", "ellemedim" gibi ifadeler kesinlikle yasak.
+Direkt içeriğe gir, metodoloji anlatma."""
 
     user = f"""
 {bugun} tarihli Garanti BBVA gün ortası notlarını analiz et.
@@ -421,8 +425,13 @@ Resmi rapor dili kullanma. Zorlama kalıplardan kaçın."""
 🕐 *GÜN ORTASI NOTLARI*
 _{bugun}_
 
+Başlıktan önce tek cümlelik bir giriş yaz. Format:
+"Öğlen itibarıyla [o anki en önemli gelişme veya endeks durumu 1 cümlede]."
+Örnek: "Öğlen itibarıyla endeks 14.200 civarında seyrediyor, sabahın temkinli havası devam ediyor."
+Açıklama yapma, direkt gir.
+
 **Piyasalar**
-Aşağıdaki tabloyu olduğu gibi koy, hiçbir şey ekleme, değiştirme, açıklama yapma:
+Aşağıdaki tabloyu olduğu gibi koy, hiçbir ekleme veya açıklama yapma:
 {market_table}
 
 **Gün İçinde Ne Oldu?**

@@ -51,15 +51,16 @@ def send_telegram(message):
 # 3. GEMİNİ 2.5 ANALİZ MOTORU (MAX KALİTE)
 # ==========================================
 def get_ai_analysis(pdf_text, prev_sum, r_type):
-    try:
-        print("--- Gemini 2.5 Flash Analizi Başlatılıyor... ---")
-        model = genai.GenerativeModel('gemini-2.5-flash')
+    for attempt in range(3):
+        try:
+            print(f"--- Gemini 2.5 Flash Analizi Başlatılıyor... (Deneme {attempt+1}/3) ---")
+            model = genai.GenerativeModel('gemini-2.5-flash')
 
-        is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
-        display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PIYASA ÖZETİ ANALİZİ"
+            is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
+            display_title = "GÜN ORTASI NOTLARI ANALİZİ" if is_ogle else "GÜNLÜK PIYASA ÖZETİ ANALİZİ"
 
-        if is_ogle:
-            prompt = f"""
+            if is_ogle:
+                prompt = f"""
 Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi profesyonel için analiz yap.
 
 GÖRSEL KURALLAR — BUNLARA TAM UY:
@@ -83,8 +84,8 @@ ZORUNLU BÖLÜMLER (bu sırayla):
 ÖNCEKİ ÖZET: {prev_sum if prev_sum else "İlk analiz verisi."}
 METİN: {pdf_text[:15000]}
 """
-        else:
-            prompt = f"""
+            else:
+                prompt = f"""
 Sen kıdemli bir finansal analistsin. Bir İşletme Mühendisi ve SPL Düzey 1 sahibi bir profesyonel için analiz yap.
 
 GÖRSEL KURALLAR:
@@ -100,12 +101,17 @@ GÖRSEL KURALLAR:
 METİN: {pdf_text[:15000]}
 """
 
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        error_msg = f"ERROR_GEMINI: {str(e)}"
-        print(f"!!! {error_msg}")
-        return error_msg
+            response = model.generate_content(prompt)
+            return response.text
+
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                print(f"Kota hatası, 60sn bekleniyor... ({attempt+1}/3)")
+                time.sleep(60)
+            else:
+                error_msg = f"ERROR_GEMINI: {str(e)}"
+                print(f"!!! {error_msg}")
+                return error_msg
 
 # ==========================================
 # 4. ANA OTOMASYON

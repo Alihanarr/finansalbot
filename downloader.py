@@ -94,103 +94,144 @@ def send_telegram(message):
         time.sleep(2)
 
 # ==========================================
-# 4. PDF'DEN VERİ ÇEKME
+# 4. TACİRLER SABAH BÜLTENİ
 # ==========================================
-def extract_pdf_data(text):
+def fetch_tacirler_bulten(history, page):
     """
-    PDF metninden sayısal piyasa verilerini regex ile çeker.
-    Bulunanları sözlük olarak döndürür.
+    Tacirler günlük bülten sayfasından bugünkü bülteni çeker.
+    HTML içeriğini doğrudan okur, PDF'e gerek yok.
     """
-    data = {}
+    bugun_sayi = datetime.now().strftime("%d.%m.%Y")
+    report_key = "SABAH_RAPORU"
 
-    patterns = {
-        "BIST100":      r'(?:BIST[\s\-]*100|BİST[\s\-]*100)[^\d]*(\d{4,6}(?:[.,]\d+)?)',
-        "USDTRY":       r'(?:USD[\s/]*TL|USDTRY|\$/TL)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
-        "EURTRY":       r'(?:EUR[\s/]*TL|EURTRY|€/TL)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
-        "ALTIN":        r'(?:Alt[ıi]n[\s]*(?:Ons)?|XAU)[^\d]*(\d{1,5}(?:[.,]\d+)?)',
-        "PETROL":       r'(?:Ham Petrol|Brent|Petrol)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
-        "GOSTERGE_TH":  r'(?:Gösterge Tahvil|G[öo]sterge)[^\d]*(\d{2,3}(?:[.,]\d+)?)',
-        "CDS_5Y":       r'(?:5Y CDS|CDS)[^\d]*(\d{2,4}(?:[.,]\d+)?)',
-    }
+    # Bugün zaten gönderildiyse atla
+    if history.get(f"{report_key}_LAST_DATE") == bugun_sayi:
+        print(f"BİLGİ: Sabah raporu zaten bugün gönderilmiş.")
+        return history
 
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            val = match.group(1).replace(",", ".")
-            data[key] = val
-            print(f"--- PDF Veri: {key} = {val} ---")
+    print(f"--- Tacirler Bülten Sayfası Kontrol Ediliyor: {bugun_sayi} ---")
+
+    try:
+        page.goto("https://tacirler.com.tr/arastirma/gunluk-bulten", 
+                  wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(5000)
+
+        # En üstteki bülten linkini bul
+        html = page.content()
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Bülten listesindeki ilk makale linkini bul
+        bulten_link = None
+        bulten_tarih = None
+
+        # Tarih ve link içeren kartları tara
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag.get("href", "")
+            if "gunluk-bulen" in href or "gunluk-bulten" in href:
+                # Tarih bilgisi için parent elementi kontrol et
+                parent = a_tag.find_parent()
+                parent_text = parent.get_text() if parent else ""
+
+                # Bugünün tarihini farklı formatlarda ara
+                gun = datetime.now().strftime('%d')
+                ay_sayisal = datetime.now().strftime('%m')
+                yil = datetime.now().strftime('%Y')
+
+                aylar = {
+                    "01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs",
+                    "06":"Haziran","07":"Temmuz","08":"Ağustos","09":"Eylül",
+                    "10":"Ekim","11":"Kasım","12":"Aralık"
+                }
+                bugun_metin = f"{gun}.{ay_sayisal}.{yil}"
+                bugun_metin2 = f"{int(gun)} {aylar[ay_sayisal]} {yil}"
+
+                if bugun_metin in parent_text or bugun_metin2 in parent_text or bugun_sayi in parent_text:
+                    bulten_link = "https://tacirler.com.tr" + href if href.startswith("/") else href
+                    bulten_tarih = bugun_sayi
+                    print(f"--- Bugünkü bülten bulundu: {bulten_link} ---")
+                    break
+
+        # Bulunamadıysa ilk linki dene (tarih kontrolü sayfada olmayabilir)
+        if not bulten_link:
+            for a_tag in soup.find_all("a", href=True):
+                href = a_tag.get("href", "")
+                if "gunluk-bulen" in href and "arastirma" not in href:
+                    bulten_link = "https://tacirler.com.tr" + href if href.startswith("/") else href
+                    print(f"--- İlk bülten linki deneniyor: {bulten_link} ---")
+                    break
+
+        if not bulten_link:
+            print("!!! Bülten linki bulunamadı.")
+            return history
+
+        # Bülten sayfasına git ve içeriği oku
+        page.goto(bulten_link, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(3000)
+
+        bulten_html = page.content()
+        bulten_soup = BeautifulSoup(bulten_html, "html.parser")
+
+        # Tarih kontrolü — sayfadaki tarihi oku
+        tarih_elem = bulten_soup.find("h2", class_=lambda c: c and "fw-700" in c)
+        if tarih_elem:
+            sayfa_tarih = tarih_elem.get_text(strip=True)
+            print(f"--- Sayfadaki tarih: {sayfa_tarih} ---")
+            # Bugünün tarihi değilse atla
+            if bugun_sayi not in sayfa_tarih and bugun_sayi.replace(".", "") not in sayfa_tarih.replace(".", ""):
+                print(f"BİLGİ: Bülten tarihi {sayfa_tarih}, bugün değil. Atlanıyor.")
+                return history
+
+        # İçerikleri çek
+        sections = {}
+        for section in bulten_soup.find_all("section"):
+            baslik_elem = section.find("h2")
+            baslik = baslik_elem.get_text(strip=True) if baslik_elem else "Diğer"
+            icerik = section.get_text(separator="\n", strip=True)
+            sections[baslik] = icerik
+
+        # Piyasa verileri tablosunu da çek (PDF'deki gibi)
+        piyasa_verisi = ""
+        for elem in bulten_soup.find_all(["table", "div"], class_=lambda c: c and ("piyasa" in str(c).lower() or "table" in str(c).lower())):
+            piyasa_verisi += elem.get_text(separator=" | ", strip=True) + "\n"
+
+        # Tüm metni birleştir
+        tam_metin = f"Tarih: {bugun_sayi}\n\n"
+        for baslik, icerik in sections.items():
+            tam_metin += f"=== {baslik} ===\n{icerik}\n\n"
+
+        if piyasa_verisi:
+            tam_metin = f"PİYASA VERİLERİ:\n{piyasa_verisi}\n\n" + tam_metin
+
+        print(f"--- Bülten içeriği çekildi ({len(tam_metin)} karakter) ---")
+        print("=== İLK 1500 KARAKTER ===")
+        print(tam_metin[:1500])
+
+        # AI analizi
+        analysis = get_ai_analysis_tacirler(tam_metin, history, report_key)
+
+        if "ERROR" not in analysis:
+            send_telegram(analysis)
+            history[f"{report_key}_LAST_DATE"] = bugun_sayi
+            history[f"{report_key}_SUMMARY"] = analysis[:3000]  # özet olarak sakla
+            print(f"--- Sabah raporu TAMAMLANDI ---")
         else:
-            data[key] = None
+            print(f"!!! Sabah raporu Analiz Hatası: {analysis}")
 
-    return data
+    except Exception as e:
+        print(f"!!! Tacirler Bülten Hatası: {e}")
 
-# ==========================================
-# 5. (=) FİLTRESİ — KOD SEVİYESİNDE
-# ==========================================
-def filter_neutral_items(text):
-    lines = text.split("\n")
-    filtered = []
-    skip_block = False
-
-    for line in lines:
-        stripped = line.strip()
-        is_new_item = bool(re.match(r'^[A-ZÇĞİÖŞÜ]{3,6}[\s:]', stripped)) or stripped.startswith("-")
-
-        if is_new_item:
-            if "(=)" in stripped:
-                skip_block = True
-            elif "(+)" in stripped or "(-)" in stripped:
-                skip_block = False
-                filtered.append(line)
-            else:
-                skip_block = False
-                filtered.append(line)
-        else:
-            if not skip_block:
-                filtered.append(line)
-
-    removed = len(re.findall(r'\(=\)', text))
-    print(f"--- Filtre: {removed} adet (=) maddesi çıkarıldı ---")
-    return "\n".join(filtered)
+    return history
 
 # ==========================================
-# 6. RAPOR ANALİZİ (GROK)
+# 5. RAPOR ANALİZİ (GROK) — TACİRLER
 # ==========================================
-def get_ai_analysis(pdf_text, history, report_key, r_type):
-    pdf_text_filtered = filter_neutral_items(pdf_text)
-    market_data = extract_pdf_data(pdf_text)
-
-    is_ogle = "gün ortası" in r_type.lower() or "ogle" in r_type.lower()
-    display_title = "🕐 GÜN ORTASI NOTLARI" if is_ogle else "🌅 GÜNLÜK PİYASA ÖZETİ"
+def get_ai_analysis_tacirler(metin, history, report_key):
     bugun = datetime.now().strftime("%d.%m.%Y")
 
-    # Piyasa verilerini tablo olarak hazırla
-    def fmt(v): return v if v else "raporda net görülemedi"
-    market_table = f"""
-BIST-100    : {fmt(market_data.get('BIST100'))}
-USD/TL      : {fmt(market_data.get('USDTRY'))}
-EUR/TL      : {fmt(market_data.get('EURTRY'))}
-Altın (Ons) : {fmt(market_data.get('ALTIN'))}
-Ham Petrol  : {fmt(market_data.get('PETROL'))}
-Gösterge Th.: {fmt(market_data.get('GOSTERGE_TH'))}
-5Y CDS      : {fmt(market_data.get('CDS_5Y'))}
-"""
+    prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
+    prev_ogle  = history.get("OGLE_RAPORU_SUMMARY", "")
 
-    # Kıyaslama geçmişi
-    if is_ogle:
-        prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
-        prev_ogle  = history.get("OGLE_RAPORU_SUMMARY", "")
-        karsilastirma = f"""
-Bugünkü sabah raporu özeti:
-{prev_sabah[:1500] if prev_sabah else "Henüz yok."}
-
-Dünkü öğle raporu özeti:
-{prev_ogle[:1000] if prev_ogle else "Henüz yok."}
-"""
-    else:
-        prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
-        prev_ogle  = history.get("OGLE_RAPORU_SUMMARY", "")
-        karsilastirma = f"""
+    karsilastirma = f"""
 Dünkü sabah raporu özeti:
 {prev_sabah[:1500] if prev_sabah else "Henüz yok."}
 
@@ -198,56 +239,192 @@ Dünkü öğle raporu özeti:
 {prev_ogle[:1000] if prev_ogle else "Henüz yok."}
 """
 
-    system = """Sen deneyimli bir finansal analistsin. Kullanıcı seni her sabah ve öğlen bilgilendirmeni bekliyor.
+    system = """Sen deneyimli bir finansal analistsin. Kullanıcı seni her sabah piyasa özetini aktarmanı bekliyor.
 Yazın samimi, akıcı ve doğal Türkçe olsun — sanki bir meslektaşın sana durumu anlatıyormuş gibi.
 Resmi rapor dili kullanma. Zorlama kalıplardan kaçın. Kısa ve öz cümleler kur."""
 
     user = f"""
-{bugun} tarihli {r_type} raporunu analiz et ve aşağıdaki formatta yaz.
+{bugun} tarihli Tacirler Yatırım sabah bültenini analiz et.
 
-BAŞLIK OLARAK SADECE ŞU İKİ SATIRI YAZ, başka bir şey ekleme:
-{display_title}
+Şu bölümleri sırayla yaz:
+
+🌅 *GÜNLÜK PİYASA ÖZETİ*
 _{bugun}_
 
-Sonra şu bölümleri sırayla yaz:
+**Piyasalar**
+Rapordaki piyasa verilerini tabloda göster. Sadece metinde geçen gerçek sayıları kullan.
+```
+| Enstrüman     | Değer      | Değişim |
+|---------------|------------|---------|
+| BIST-100      | ...        | ...     |
+...
+```
 
-**Genel Tablo**
-Koddan çektiğim bu verileri kullan — başka kaynak üretme:
-{market_table}
-Bu verileri ```...``` içinde düzenli tablo olarak göster.
-"raporda net görülemedi" yazanları tabloya dahil etme, sadece bulunanları yaz.
-
-**Piyasada Bugün Ne Var?**
-Rapordaki ana temayı 3-5 cümleyle anlat. Jeopolitik, faiz, risk iştahı — ne öne çıkıyorsa.
+**Güne Başlarken**
+Ana temayı 3-5 cümleyle anlat. Jeopolitik, faiz, risk iştahı — ne öne çıkıyorsa.
 Doğal dille, "piyasalar şunu yapıyor, çünkü şu oluyor" mantığıyla.
 
 **Teknik Seviyeler**
-BIST-100, VİOP ve varsa diğerleri için destek/direnç seviyelerini kısa ver.
-"14.200 altı zayıflık sinyali, 14.600 üzeri toparlanma..." gibi sade bir dille.
+BIST-100 ve VİOP için destek/direnç kısa ve net.
 
 **Şirket Haberleri**
-Sadece olumlu veya olumsuz gelişmeler var burada — nötr olanlar zaten çıkarıldı.
-Her hisse için: ne oldu, neden önemli, kısa vadede ne beklenebilir?
-Doğal anlat — "HEKTS bugün AR-GE belgesi aldı, bu teşviklere kapı açıyor..." gibi.
-🟢 olumlu, 🔴 olumsuz emoji kullan ama işareti tekrar etme.
+Her şirket için ne oldu, neden önemli, kısa vadede ne beklenebilir?
+Olumlu gelişmeler için 🟢, olumsuz için 🔴 kullan.
+Doğal anlat — "CWENE bu çeyrekte karını ikiye katladı, güçlü büyüme devam ediyor..." gibi.
+
+**Ekonomi Haberleri**
+Önemli makro gelişmeleri kısaca özetle.
 
 **Dünle Kıyasla**
 {karsilastirma[:2000]}
-Varsa kıyasla, yoksa "Karşılaştırmak için henüz yeterli veri yok, ilerleyen günlerde daha net olacak." de.
-Kıyaslarken doğal konuş: "Sabaha göre dolar biraz daha sertleşmiş...", "Dünkü öğleye kıyasla risk iştahı azalmış gibi görünüyor..."
+Varsa karşılaştır, yoksa geç.
+Kıyaslarken doğal konuş: "Dünkü sabaha göre dolar biraz daha yukarı..."
 
 **Kısa Vadeli Beklenti**
-Önümüzdeki 1-3 gün için sade bir yorum. İyimser/kötümser iki senaryo, hangisi daha olası?
+Önümüzdeki 1-3 gün için sade yorum. İyimser/kötümser senaryo.
 Dikkat edilmesi gereken seviye veya gelişme var mı?
-"Şu an için temkinli durmak mantıklı..." veya "14.600 kırılırsa işler değişebilir..." gibi.
 
-RAPOR METNİ:
-{pdf_text_filtered[:18000]}
+BÜLTEN İÇERİĞİ:
+{metin[:18000]}
 """
 
-    print(f"--- Grok Rapor Analizi Başlatılıyor ({r_type}) ---")
+    print(f"--- Grok Tacirler Analizi Başlatılıyor ---")
     result = call_grok(system, user, max_tokens=6000)
     return result
+
+# ==========================================
+# 6. GÜN ORTASI RAPORU (GARANTİ BBVA)
+# ==========================================
+def get_ai_analysis_garanti(pdf_text, history):
+    """Garanti gün ortası notları için Grok analizi."""
+    bugun = datetime.now().strftime("%d.%m.%Y")
+
+    prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
+    prev_ogle  = history.get("OGLE_RAPORU_SUMMARY", "")
+
+    karsilastirma = f"""
+Bugünkü sabah raporu özeti:
+{prev_sabah[:1500] if prev_sabah else "Henüz yok."}
+
+Dünkü öğle raporu özeti:
+{prev_ogle[:1000] if prev_ogle else "Henüz yok."}
+"""
+
+    system = """Sen deneyimli bir finansal analistsin. Kullanıcı seni öğlen piyasa güncellemesini aktarmanı bekliyor.
+Yazın samimi, akıcı ve doğal Türkçe olsun — sanki bir meslektaşın sana durumu anlatıyormuş gibi.
+Resmi rapor dili kullanma. Zorlama kalıplardan kaçın."""
+
+    user = f"""
+{bugun} tarihli Garanti BBVA gün ortası notlarını analiz et.
+
+Şu bölümleri sırayla yaz:
+
+🕐 *GÜN ORTASI NOTLARI*
+_{bugun}_
+
+**Piyasalar**
+PDF'deki gerçek sayıları kullan — tahmin yapma, üretme.
+Bulamazsan o satırı tabloya ekleme.
+```
+| Enstrüman  | Değer | Değişim |
+|------------|-------|---------|
+...
+```
+
+**Gün İçinde Ne Oldu?**
+Ana temayı 3-5 cümleyle anlat. Sabahtan bu yana ne değişti?
+Doğal dille konuş.
+
+**Teknik Seviyeler**
+BIST-100 ve VİOP için destek/direnç kısa ve net.
+
+**Şirket Haberleri**
+Olumlu için 🟢, olumsuz için 🔴.
+Her şirket için ne oldu, neden önemli, kısa vadede ne bekleniyor?
+Doğal anlat, işaret tekrarı yapma.
+
+**Sabahla Kıyasla**
+{karsilastirma[:2000]}
+Varsa karşılaştır — "Sabaha göre dolar biraz daha sertleşmiş..." gibi doğal dille.
+
+**Kısa Vadeli Beklenti**
+Günün geri kalanı ve yarın için sade yorum.
+
+PDF METNİ:
+{pdf_text[:18000]}
+"""
+
+    print(f"--- Grok Garanti Öğle Analizi Başlatılıyor ---")
+    return call_grok(system, user, max_tokens=6000)
+
+
+def fetch_ogle_raporu(history, page):
+    """Garanti BBVA gün ortası notlarını çeker ve analiz eder."""
+    bugun_sayi = datetime.now().strftime("%d.%m.%Y")
+    report_key = "OGLE_RAPORU"
+
+    if history.get(f"{report_key}_LAST_DATE") == bugun_sayi:
+        print(f"BİLGİ: Öğle raporu zaten bugün gönderilmiş.")
+        return history
+
+    aylar = {
+        "01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs","06":"Haziran",
+        "07":"Temmuz","08":"Ağustos","09":"Eylül","10":"Ekim","11":"Kasım","12":"Aralık"
+    }
+    gun = datetime.now().strftime('%d').lstrip('0')
+    bugun_metin = f"{gun} {aylar[datetime.now().strftime('%m')]}".lower()
+
+    site_url = "https://www.garantibbvayatirim.com.tr/arastirma-raporlari"
+    print(f"--- Garanti BBVA Gün Ortası Kontrol Ediliyor: {bugun_sayi} ---")
+
+    try:
+        page.goto(site_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(10000)
+
+        items = page.query_selector_all(".reports-list-item")
+        print(f"--- Sitede {len(items)} adet rapor bulundu ---")
+
+        for item in items:
+            text = item.inner_text().lower()
+            if "gün ortası notları" in text and (bugun_sayi in text or bugun_metin in text):
+                print(f"--- EŞLEŞME: Gün ortası notları işleniyor ---")
+                link_elem = item.query_selector("a.report-download")
+                if link_elem:
+                    pdf_url = link_elem.get_attribute("href")
+                    if not pdf_url.startswith("http"):
+                        pdf_url = "https://www.garantibbvayatirim.com.tr" + pdf_url
+
+                    resp = requests.get(pdf_url)
+                    with open("temp_ogle.pdf", "wb") as f:
+                        f.write(resp.content)
+
+                    with pdfplumber.open("temp_ogle.pdf") as pdf:
+                        raw_text = "".join(
+                            p.extract_text(layout=True) or ""
+                            for p in pdf.pages[:8]
+                        )
+
+                    print("=== ÖĞLE PDF (ilk 1000 karakter) ===")
+                    print(raw_text[:1000])
+
+                    time.sleep(3)
+                    analysis = get_ai_analysis_garanti(raw_text, history)
+
+                    if "ERROR" not in analysis:
+                        send_telegram(analysis)
+                        history[f"{report_key}_LAST_DATE"] = bugun_sayi
+                        history[f"{report_key}_SUMMARY"] = analysis[:3000]
+                        print(f"--- Öğle raporu TAMAMLANDI ---")
+                    else:
+                        print(f"!!! Öğle raporu Analiz Hatası: {analysis}")
+                break
+        else:
+            print(f"BİLGİ: Gün ortası notları için bugüne ait rapor bulunamadı.")
+
+    except Exception as e:
+        print(f"!!! Garanti Öğle Raporu Hatası: {e}")
+
+    return history
 
 # ==========================================
 # 7. HABER KAYNAKLARI
@@ -387,10 +564,10 @@ def find_duplicates_and_summarize(all_items):
     news_text = "\n".join(news_lines)
 
     system = """Sen deneyimli bir finansal analistsin. Son dakika haberleri geliyor, hangisi piyasayı etkiler?
-Kısa, net, doğal Türkçe yaz. Resmi rapor dili kullanma."""
+Kısa, net, doğal Türkçe yaz."""
 
     user = f"""
-Bu haberlere bak, sadece piyasayı gerçekten etkileyen (+) veya (-) olanları yaz.
+Bu haberlere bak, sadece piyasayı gerçekten etkileyen olumlu (+) veya olumsuz (-) olanları yaz.
 Nötr/etkisiz haberleri atla.
 
 Her önemli haber için:
@@ -444,90 +621,31 @@ def run_news_monitor(history):
 # 11. ANA OTOMASYON
 # ==========================================
 def process_automation():
-    targets = {"günlük piyasa özeti": "SABAH_RAPORU", "gün ortası notları": "OGLE_RAPORU"}
-    bugun_sayi = datetime.now().strftime("%d.%m.%Y")
-
-    aylar = {
-        "01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs","06":"Haziran",
-        "07":"Temmuz","08":"Ağustos","09":"Eylül","10":"Ekim","11":"Kasım","12":"Aralık"
-    }
-    gun = datetime.now().strftime('%d').lstrip('0')
-    bugun_metin = f"{gun} {aylar[datetime.now().strftime('%m')]}".lower()
-
     history_file = "history.json"
     history = json.load(open(history_file)) if os.path.exists(history_file) else {}
 
-    # ---- RAPOR MODÜLÜ (Garanti BBVA) ----
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
-        site_url = "https://www.garantibbvayatirim.com.tr/arastirma-raporlari"
-        print(f"--- Garanti BBVA Siteye Gidiliyor: {bugun_sayi} ---")
+        page = browser.new_page(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        )
 
         try:
-            page.goto(site_url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(10000)
+            # ---- SABAH BÜLTENİ (Tacirler) ----
+            history = fetch_tacirler_bulten(history, page)
 
-            items = page.query_selector_all(".reports-list-item")
-            print(f"--- Sitede {len(items)} adet rapor bulundu ---")
-
-            for target_title, report_key in targets.items():
-                found = False
-                for item in items:
-                    text = item.inner_text().lower()
-                    if target_title in text and (bugun_sayi in text or bugun_metin in text):
-                        found = True
-                        if history.get(f"{report_key}_LAST_DATE") != bugun_sayi:
-                            print(f"--- EŞLEŞME: {target_title} işleniyor ---")
-                            link_elem = item.query_selector("a.report-download")
-                            if link_elem:
-                                pdf_url = link_elem.get_attribute("href")
-                                if not pdf_url.startswith("http"):
-                                    pdf_url = "https://www.garantibbvayatirim.com.tr" + pdf_url
-
-                                resp = requests.get(pdf_url)
-                                with open("temp.pdf", "wb") as f:
-                                    f.write(resp.content)
-
-                                with pdfplumber.open("temp.pdf") as pdf:
-                                    raw_text = "".join(
-                                        p.extract_text(layout=True) or ""
-                                        for p in pdf.pages[:8]
-                                    )
-
-                                print("=== HAM PDF (ilk 1500 karakter) ===")
-                                print(raw_text[:1500])
-
-                                time.sleep(3)
-                                analysis = get_ai_analysis(
-                                    raw_text,
-                                    history,
-                                    report_key,
-                                    target_title
-                                )
-
-                                if "ERROR" not in analysis:
-                                    send_telegram(analysis)
-                                    history[f"{report_key}_LAST_DATE"] = bugun_sayi
-                                    history[f"{report_key}_SUMMARY"] = analysis
-                                    print(f"--- {target_title} TAMAMLANDI ---")
-                                else:
-                                    print(f"!!! {target_title} Analiz Hatası: {analysis}")
-                        else:
-                            print(f"BİLGİ: {target_title} zaten bugün gönderilmiş.")
-                        break
-
-                if not found:
-                    print(f"BİLGİ: {target_title} için bugüne ait rapor bulunamadı.")
+            # ---- GÜN ORTASI RAPORU ----
+            history = fetch_ogle_raporu(history, page)
 
         except Exception as e:
-            print(f"!!! KRİTİK HATA (Rapor Modülü): {e}")
+            print(f"!!! KRİTİK HATA: {e}")
         finally:
             browser.close()
 
     # ---- HABER MONİTÖRÜ ----
     history = run_news_monitor(history)
 
+    # History kaydet
     with open(history_file, "w") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
     print("--- History kaydedildi ---")

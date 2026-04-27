@@ -240,8 +240,13 @@ def fetch_tacirler_bulten(history, page):
             for p in pdf.pages:
                 text = p.extract_text(layout=True) or ""
                 tam_metin += text + "\n\n"
-            print(f"--- PDF okundu: {len(pdf.pages)} sayfa, {len(tam_metin)} karakter ---")
 
+        # Gereksiz boşlukları temizle — layout=True çok whitespace üretiyor
+        tam_metin = re.sub(r' {2,}', ' ', tam_metin)      # çoklu boşluk → tek boşluk
+        tam_metin = re.sub(r'\n{3,}', '\n\n', tam_metin)  # çoklu satır → çift satır
+        tam_metin = tam_metin.strip()
+
+        print(f"--- PDF okundu: {len(pdf.pages)} sayfa, temizlenmiş {len(tam_metin)} karakter ---")
         print("=== İLK 1500 KARAKTER ===")
         print(tam_metin[:1500])
 
@@ -337,11 +342,11 @@ Her biri için 1-2 cümle, doğal dille:
 Olumlu/olumsuz/karışık — nasıl hissettiriyorsa öyle yaz, işaret tekrarlama.
 
 BÜLTEN İÇERİĞİ:
-{metin[:20000]}
+{metin[:35000]}
 """
 
     print(f"--- Grok Tacirler Analizi Başlatılıyor ---")
-    result = call_grok(system, user, max_tokens=6000)
+    result = call_grok(system, user, max_tokens=8000)
     return result
 
 
@@ -402,11 +407,11 @@ Varsa karşılaştır, yoksa bu bölümü atla. "Sabaha göre dolar biraz daha s
 Kısa vadeli beklenti — yarım cümle bile yeter bazen.
 
 PDF METNİ:
-{pdf_text[:18000]}
+{pdf_text[:30000]}
 """
 
     print(f"--- Grok Garanti Öğle Analizi Başlatılıyor ---")
-    return call_grok(system, user, max_tokens=6000)
+    return call_grok(system, user, max_tokens=8000)
 
 
 def fetch_ogle_raporu(history, page):
@@ -431,58 +436,91 @@ def fetch_ogle_raporu(history, page):
         page.goto(site_url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(10000)
 
-        items = page.query_selector_all(".reports-list-item")
-        print(f"--- Sitede {len(items)} adet rapor bulundu ---")
+        # Tüm olası kart selectorlarını dene
+        items = page.query_selector_all(".reports-list-item, article, .report-item, .card, li")
+        print(f"--- Sitede {len(items)} adet element bulundu ---")
 
+        pdf_url = None
         for item in items:
-            text = item.inner_text().lower()
-            if "gün ortası notları" in text and (bugun_sayi in text or bugun_metin in text):
-                print(f"--- EŞLEŞME: Gün ortası notları işleniyor ---")
-                link_elem = item.query_selector("a.report-download")
-                if link_elem:
-                    pdf_url = link_elem.get_attribute("href")
-                    if not pdf_url.startswith("http"):
-                        pdf_url = "https://www.garantibbvayatirim.com.tr" + pdf_url
+            try:
+                text = item.inner_text() or ""
+            except:
+                continue
+            text_lower = text.lower()
 
-                    resp = requests.get(pdf_url)
-                    with open("temp_ogle.pdf", "wb") as f:
-                        f.write(resp.content)
+            # Debug: her kartın ilk 80 karakterini logla
+            print(f"KART: {text_lower[:80].strip()}")
 
-                    with pdfplumber.open("temp_ogle.pdf") as pdf:
-                        raw_text = "".join(
-                            p.extract_text(layout=True) or ""
-                            for p in pdf.pages[:8]
-                        )
+            # Hem "gün ortası notları" hem bugünün tarihi aynı kartta olmalı
+            if "gün ortası notları" not in text_lower:
+                continue
+            if bugun_sayi not in text and bugun_metin not in text_lower:
+                continue
 
-                    print("=== ÖĞLE PDF (ilk 1000 karakter) ===")
-                    print(raw_text[:1000])
+            print(f"--- EŞLEŞME: Gün ortası notları işleniyor ---")
 
-                    print("--- Öğle canlı piyasa verisi çekiliyor ---")
-                    market_data = fetch_market_data()
-                    sabah_data = history.get("SABAH_MARKET_DATA", {})
-                    for key in market_data:
-                        if market_data[key]["change"] is None and key in sabah_data:
-                            sabah_val = sabah_data[key].get("value")
-                            cur_val = market_data[key].get("value")
-                            if sabah_val and cur_val and sabah_val != 0:
-                                market_data[key]["change"] = round(((cur_val - sabah_val) / sabah_val) * 100, 2)
-                    prev_ogle_data = history.get("OGLE_MARKET_DATA", {})
-                    market_table = format_market_table(market_data, prev_ogle_data)
-                    history["OGLE_MARKET_DATA"] = market_data
-
-                    time.sleep(3)
-                    analysis = get_ai_analysis_garanti(raw_text, history, market_table)
-
-                    if "ERROR" not in analysis:
-                        send_telegram(analysis)
-                        history[f"{report_key}_LAST_DATE"] = bugun_sayi
-                        history[f"{report_key}_SUMMARY"] = analysis[:3000]
-                        print(f"--- Öğle raporu TAMAMLANDI ---")
-                    else:
-                        print(f"!!! Öğle raporu Analiz Hatası: {analysis}")
+            # PDF linkini bul — önce href'te .pdf ara, sonra "İndir" metinli link
+            link_elem = (
+                item.query_selector("a[href*='.pdf']") or
+                item.query_selector("a[href*='indir']") or
+                item.query_selector("a:has-text('İndir')") or
+                item.query_selector("a.report-download")
+            )
+            if link_elem:
+                pdf_url = link_elem.get_attribute("href")
+                if pdf_url and not pdf_url.startswith("http"):
+                    pdf_url = "https://www.garantibbvayatirim.com.tr" + pdf_url
+                print(f"--- PDF linki bulundu: {pdf_url} ---")
                 break
-        else:
+            else:
+                print("!!! Kart bulundu ama PDF linki yok.")
+
+        if not pdf_url:
             print(f"BİLGİ: Gün ortası notları için bugüne ait rapor bulunamadı.")
+            return history
+
+        # PDF indir ve oku
+        resp = requests.get(pdf_url)
+        with open("temp_ogle.pdf", "wb") as f:
+            f.write(resp.content)
+
+        with pdfplumber.open("temp_ogle.pdf") as pdf:
+            raw_text = "".join(
+                p.extract_text(layout=True) or ""
+                for p in pdf.pages[:8]
+            )
+
+        # Gereksiz boşlukları temizle
+        raw_text = re.sub(r' {2,}', ' ', raw_text)
+        raw_text = re.sub(r'\n{3,}', '\n\n', raw_text)
+        raw_text = raw_text.strip()
+
+        print(f"=== ÖĞLE PDF (temizlenmiş {len(raw_text)} karakter) ===")
+        print(raw_text[:1000])
+
+        print("--- Öğle canlı piyasa verisi çekiliyor ---")
+        market_data = fetch_market_data()
+        sabah_data = history.get("SABAH_MARKET_DATA", {})
+        for key in market_data:
+            if market_data[key]["change"] is None and key in sabah_data:
+                sabah_val = sabah_data[key].get("value")
+                cur_val = market_data[key].get("value")
+                if sabah_val and cur_val and sabah_val != 0:
+                    market_data[key]["change"] = round(((cur_val - sabah_val) / sabah_val) * 100, 2)
+        prev_ogle_data = history.get("OGLE_MARKET_DATA", {})
+        market_table = format_market_table(market_data, prev_ogle_data)
+        history["OGLE_MARKET_DATA"] = market_data
+
+        time.sleep(3)
+        analysis = get_ai_analysis_garanti(raw_text, history, market_table)
+
+        if "ERROR" not in analysis:
+            send_telegram(analysis)
+            history[f"{report_key}_LAST_DATE"] = bugun_sayi
+            history[f"{report_key}_SUMMARY"] = analysis[:3000]
+            print(f"--- Öğle raporu TAMAMLANDI ---")
+        else:
+            print(f"!!! Öğle raporu Analiz Hatası: {analysis}")
 
     except Exception as e:
         print(f"!!! Garanti Öğle Raporu Hatası: {e}")

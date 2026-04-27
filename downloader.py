@@ -97,10 +97,6 @@ def send_telegram(message):
 # 4. CANLI PİYASA VERİSİ (Yahoo Finance)
 # ==========================================
 def fetch_market_data():
-    """
-    Yahoo Finance üzerinden BIST100, BIST30, USD/TL, EUR/TL verilerini çeker.
-    Semboller: XU100.IS, XU030.IS, USDTRY=X, EURTRY=X
-    """
     symbols = {
         "BIST-100": "XU100.IS",
         "BIST-30":  "XU030.IS",
@@ -142,11 +138,6 @@ def fetch_market_data():
 
 
 def format_market_table(market_data, prev_market_data=None):
-    """
-    Piyasa verisini tablo formatında string'e çevirir.
-    Değişim yoksa -- yazar.
-    prev_market_data: önceki rapordaki değerler (gün ortası için sabah değerleri)
-    """
     lines = [
         "```",
         "| Enstrüman  | Değer     | Değişim  |",
@@ -156,7 +147,6 @@ def format_market_table(market_data, prev_market_data=None):
         value = d.get("value")
         change = d.get("change")
 
-        # Gün ortası için: değişim yoksa önceki raporla kıyasla
         if change is None and prev_market_data and name in prev_market_data:
             prev_val = prev_market_data[name].get("value")
             if prev_val and value and prev_val != 0:
@@ -174,14 +164,9 @@ def format_market_table(market_data, prev_market_data=None):
 # 5. TACİRLER SABAH BÜLTENİ
 # ==========================================
 def fetch_tacirler_bulten(history, page):
-    """
-    Tacirler günlük bülten sayfasından bugünkü bülteni çeker.
-    HTML içeriğini doğrudan okur, PDF'e gerek yok.
-    """
     bugun_sayi = datetime.now().strftime("%d.%m.%Y")
     report_key = "SABAH_RAPORU"
 
-    # Bugün zaten gönderildiyse atla
     if history.get(f"{report_key}_LAST_DATE") == bugun_sayi:
         print(f"BİLGİ: Sabah raporu zaten bugün gönderilmiş.")
         return history
@@ -189,121 +174,83 @@ def fetch_tacirler_bulten(history, page):
     print(f"--- Tacirler Bülten Sayfası Kontrol Ediliyor: {bugun_sayi} ---")
 
     try:
-        page.goto("https://tacirler.com.tr/arastirma/gunluk-bulten", 
+        page.goto("https://tacirler.com.tr/arastirma/gunluk-bulten",
                   wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(5000)
 
-        # En üstteki bülten linkini bul
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
 
-        # Bülten listesindeki ilk makale linkini bul
+        # ── 1. ADIM: Liste sayfasında bugüne ait kartı bul ──
+        # Kartın herhangi bir yerinde bugünün tarihi varsa ve
+        # içinde gunluk-bulen linki varsa o linki al.
+        # find_parent() yerine kart bazlı arama yapıyoruz —
+        # böylece tarih kartın herhangi bir derinliğinde olsa da bulunur.
         bulten_link = None
-        bulten_tarih = None
 
-        # Tarih ve link içeren kartları tara
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag.get("href", "")
-            if "gunluk-bulen" in href or "gunluk-bulten" in href:
-                # Tarih bilgisi için parent elementi kontrol et
-                parent = a_tag.find_parent()
-                parent_text = parent.get_text() if parent else ""
-
-                # Bugünün tarihini farklı formatlarda ara
-                gun = datetime.now().strftime('%d')
-                ay_sayisal = datetime.now().strftime('%m')
-                yil = datetime.now().strftime('%Y')
-
-                aylar = {
-                    "01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs",
-                    "06":"Haziran","07":"Temmuz","08":"Ağustos","09":"Eylül",
-                    "10":"Ekim","11":"Kasım","12":"Aralık"
-                }
-                bugun_metin = f"{gun}.{ay_sayisal}.{yil}"
-                bugun_metin2 = f"{int(gun)} {aylar[ay_sayisal]} {yil}"
-
-                if bugun_metin in parent_text or bugun_metin2 in parent_text or bugun_sayi in parent_text:
-                    bulten_link = "https://tacirler.com.tr" + href if href.startswith("/") else href
-                    bulten_tarih = bugun_sayi
-                    print(f"--- Bugünkü bülten bulundu: {bulten_link} ---")
-                    break
-
-        # Bulunamadıysa ilk linki dene (tarih kontrolü sayfada olmayabilir)
-        if not bulten_link:
-            for a_tag in soup.find_all("a", href=True):
+        for card in soup.find_all(["article", "div", "li", "section"]):
+            # Sadece direkt child elementleri değil tüm text'e bak
+            card_text = card.get_text()
+            if bugun_sayi not in card_text:
+                continue
+            # Bu kartın içinde gunluk-bulen linki var mı?
+            for a_tag in card.find_all("a", href=True):
                 href = a_tag.get("href", "")
-                if "gunluk-bulen" in href and "arastirma" not in href:
+                if "gunluk-bulen" in href:
                     bulten_link = "https://tacirler.com.tr" + href if href.startswith("/") else href
-                    print(f"--- İlk bülten linki deneniyor: {bulten_link} ---")
+                    print(f"--- Bugünkü bülten linki bulundu: {bulten_link} ---")
                     break
+            if bulten_link:
+                break
 
         if not bulten_link:
-            print("!!! Bülten linki bulunamadı.")
+            print(f"BİLGİ: {bugun_sayi} tarihli bülten henüz yayınlanmamış, sonraki çalışmada tekrar denenecek.")
             return history
 
-        # Bülten sayfasına git, PDF linkini bul
+        # ── 2. ADIM: Detay sayfasına git, PDF linkini bul ──
         page.goto(bulten_link, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
 
-        bulten_html = page.content()
-        bulten_soup = BeautifulSoup(bulten_html, "html.parser")
+        detay_html = page.content()
+        detay_soup = BeautifulSoup(detay_html, "html.parser")
 
-        # Tarih kontrolü
-        tarih_elem = bulten_soup.find("h2", class_=lambda c: c and "fw-700" in c)
-        if tarih_elem:
-            sayfa_tarih = tarih_elem.get_text(strip=True)
-            print(f"--- Sayfadaki tarih: {sayfa_tarih} ---")
-            if bugun_sayi not in sayfa_tarih and bugun_sayi.replace(".", "") not in sayfa_tarih.replace(".", ""):
-                print(f"BİLGİ: Bülten tarihi {sayfa_tarih}, bugün değil. Atlanıyor.")
-                return history
-
-        # Detaylı PDF linkini bul
+        # Tarih doğrulaması artık burada değil, liste sayfasında yapıldı.
+        # Detay sayfasında sadece PDF linkini arıyoruz.
         pdf_url = None
-        for a_tag in bulten_soup.find_all("a", href=True):
+        for a_tag in detay_soup.find_all("a", href=True):
             href = a_tag.get("href", "")
             text = a_tag.get_text(strip=True).lower()
-            if ".pdf" in href.lower() or "detaylı pdf" in text or "pdf" in text:
+            if ".pdf" in href.lower() or "detaylı pdf" in text or "detayli pdf" in text:
                 pdf_url = href if href.startswith("http") else "https://tacirler.com.tr" + href
                 print(f"--- PDF linki bulundu: {pdf_url} ---")
                 break
 
         if not pdf_url:
-            print("!!! PDF linki bulunamadı, HTML içeriğine geri dönülüyor.")
-            # Fallback: HTML içeriğini kullan
-            sections = {}
-            for section in bulten_soup.find_all("section"):
-                baslik_elem = section.find("h2")
-                baslik = baslik_elem.get_text(strip=True) if baslik_elem else "Diğer"
-                icerik = section.get_text(separator="\n", strip=True)
-                sections[baslik] = icerik
-            tam_metin = f"Tarih: {bugun_sayi}\n\n"
-            for baslik, icerik in sections.items():
-                tam_metin += f"=== {baslik} ===\n{icerik}\n\n"
-        else:
-            # PDF'i indir ve oku
-            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-            pdf_resp = requests.get(pdf_url, headers=headers, timeout=30)
-            with open("temp_tacirler.pdf", "wb") as f:
-                f.write(pdf_resp.content)
+            print("!!! Detay sayfasında PDF linki bulunamadı.")
+            return history
 
-            with pdfplumber.open("temp_tacirler.pdf") as pdf:
-                tam_metin = ""
-                for p in pdf.pages:
-                    text = p.extract_text(layout=True) or ""
-                    tam_metin += text + "\n\n"
+        # ── 3. ADIM: PDF indir ve oku ──
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        pdf_resp = requests.get(pdf_url, headers=headers, timeout=30)
+        with open("temp_tacirler.pdf", "wb") as f:
+            f.write(pdf_resp.content)
 
+        with pdfplumber.open("temp_tacirler.pdf") as pdf:
+            tam_metin = ""
+            for p in pdf.pages:
+                text = p.extract_text(layout=True) or ""
+                tam_metin += text + "\n\n"
             print(f"--- PDF okundu: {len(pdf.pages)} sayfa, {len(tam_metin)} karakter ---")
 
         print("=== İLK 1500 KARAKTER ===")
         print(tam_metin[:1500])
 
-        # Canlı piyasa verisi çek
+        # ── 4. ADIM: Piyasa verisi + AI analizi ──
         print("--- Canlı piyasa verisi çekiliyor ---")
         market_data = fetch_market_data()
         market_table = format_market_table(market_data)
-        history["SABAH_MARKET_DATA"] = market_data  # gün ortası için sakla
+        history["SABAH_MARKET_DATA"] = market_data
 
-        # AI analizi
         analysis = get_ai_analysis_tacirler(tam_metin, history, report_key, market_table)
 
         if "ERROR" not in analysis:
@@ -319,8 +266,9 @@ def fetch_tacirler_bulten(history, page):
 
     return history
 
+
 # ==========================================
-# 5. RAPOR ANALİZİ (GROK) — TACİRLER
+# 6. RAPOR ANALİZİ (GROK) — TACİRLER
 # ==========================================
 def get_ai_analysis_tacirler(metin, history, report_key, market_table=""):
     bugun = datetime.now().strftime("%d.%m.%Y")
@@ -396,11 +344,11 @@ BÜLTEN İÇERİĞİ:
     result = call_grok(system, user, max_tokens=6000)
     return result
 
+
 # ==========================================
-# 6. GÜN ORTASI RAPORU (GARANTİ BBVA)
+# 7. GÜN ORTASI RAPORU (GARANTİ BBVA)
 # ==========================================
 def get_ai_analysis_garanti(pdf_text, history, market_table=""):
-    """Garanti gün ortası notları için Grok analizi."""
     bugun = datetime.now().strftime("%d.%m.%Y")
 
     prev_sabah = history.get("SABAH_RAPORU_SUMMARY", "")
@@ -462,7 +410,6 @@ PDF METNİ:
 
 
 def fetch_ogle_raporu(history, page):
-    """Garanti BBVA gün ortası notlarını çeker ve analiz eder."""
     bugun_sayi = datetime.now().strftime("%d.%m.%Y")
     report_key = "OGLE_RAPORU"
 
@@ -510,18 +457,15 @@ def fetch_ogle_raporu(history, page):
                     print("=== ÖĞLE PDF (ilk 1000 karakter) ===")
                     print(raw_text[:1000])
 
-                    # Canlı piyasa verisi - sabah verisini de al
                     print("--- Öğle canlı piyasa verisi çekiliyor ---")
                     market_data = fetch_market_data()
                     sabah_data = history.get("SABAH_MARKET_DATA", {})
-                    # Değişim: sabah değerlerine göre, yoksa Yahoo'nun kendi değişimini kullan
                     for key in market_data:
                         if market_data[key]["change"] is None and key in sabah_data:
                             sabah_val = sabah_data[key].get("value")
                             cur_val = market_data[key].get("value")
                             if sabah_val and cur_val and sabah_val != 0:
                                 market_data[key]["change"] = round(((cur_val - sabah_val) / sabah_val) * 100, 2)
-                    # Sabah verisinde olmayan değişim için önceki günün öğle verisini kullan
                     prev_ogle_data = history.get("OGLE_MARKET_DATA", {})
                     market_table = format_market_table(market_data, prev_ogle_data)
                     history["OGLE_MARKET_DATA"] = market_data
@@ -545,8 +489,9 @@ def fetch_ogle_raporu(history, page):
 
     return history
 
+
 # ==========================================
-# 7. HABER KAYNAKLARI
+# 8. HABER KAYNAKLARI
 # ==========================================
 NEWS_SOURCES = [
     {
@@ -586,7 +531,7 @@ FINANCE_KEYWORDS = [
 ]
 
 # ==========================================
-# 8. HABER ÇEKME
+# 9. HABER ÇEKME
 # ==========================================
 def fetch_news_from_source(source, seen_links):
     new_items = []
@@ -644,7 +589,7 @@ def fetch_news_from_source(source, seen_links):
     return new_items
 
 # ==========================================
-# 9. ÇAKIŞMA TESPİTİ + AI ÖZET
+# 10. ÇAKIŞMA TESPİTİ + AI ÖZET
 # ==========================================
 def find_duplicates_and_summarize(all_items):
     def similarity_score(t1, t2):
@@ -705,7 +650,7 @@ Haberler:
     return call_grok(system, user, max_tokens=2000)
 
 # ==========================================
-# 10. HABER MONİTÖRÜ
+# 11. HABER MONİTÖRÜ
 # ==========================================
 def run_news_monitor(history):
     print("\n========== HABER MONİTÖRÜ BAŞLADI ==========")
@@ -738,7 +683,7 @@ def run_news_monitor(history):
     return history
 
 # ==========================================
-# 11. ANA OTOMASYON
+# 12. ANA OTOMASYON
 # ==========================================
 def process_automation():
     history_file = "history.json"
